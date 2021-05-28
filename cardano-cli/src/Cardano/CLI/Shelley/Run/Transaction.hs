@@ -260,6 +260,8 @@ runTxBuildRaw (AnyCardanoEra era) inputsAndScripts txouts mLowerBound
                  <*> validateTxValidityUpperBound era mUpperBound)
         <*> validateTxMetadataInEra  era metadataSchema metadataFiles
         <*> validateTxAuxScripts     era scriptFiles
+        <*> pure TxExtraKeyWitnessesNone --TODO alonzo: support this
+        <*> pure (BuildTxWith Nothing) --TODO alonzo: support this
         <*> validateTxWithdrawals    era withdrawals
         <*> validateTxCertificates   era certFiles
         <*> validateTxUpdateProposal era mUpdatePropFile
@@ -330,6 +332,8 @@ validateTxOuts era = mapM toTxOutInAnyEra
                     -> ExceptT ShelleyTxCmdError IO (TxOut era)
     toTxOutInAnyEra (TxOutAnyEra addr val) = TxOut <$> toAddressInAnyEra addr
                                                    <*> toTxOutValueInAnyEra val
+                                                   <*> pure TxOutDatumHashNone
+                                                   -- TODO alonzo ^^ allow tx out data
 
     toAddressInAnyEra :: AddressAny -> ExceptT ShelleyTxCmdError IO (AddressInEra era)
     toAddressInAnyEra addrAny =
@@ -423,6 +427,8 @@ validateTxAuxScripts era files =
              validateScriptSupportedInEra era script
         | ScriptFile file <- files ]
       return (TxAuxScripts AuxScriptsInMaryEra scripts)
+    Just AuxScriptsInAlonzoEra ->
+      panic "TODO alonzo: validateTxAuxScripts AuxScriptsInAlonzoEra"
 
 validateTxWithdrawals
   :: forall era. IsCardanoEra era
@@ -562,7 +568,7 @@ validateTxMintValue era (Just (val, scripts)) =
                              $ SimpleScriptWitness sLangInEra sVer sScript
                          )
                 PlutusScript _ _ ->
-                  panic "TODO: reateScriptWitness: Plutus scripts not supported yet."
+                  panic "TODO alonzo: reateScriptWitness: Plutus scripts not supported yet."
 
      else left $ ShelleyTxCmdPolicyIdNotSpecified scriptHash
 
@@ -580,7 +586,7 @@ createScriptWitness era (ScriptFile fp) = do
       case script of
         SimpleScript sVer sScript ->
           return $ SimpleScriptWitness sLangInEra sVer sScript
-        PlutusScript _ _ -> panic "TODO: createScriptWitness: Plutus scripts not supported yet."
+        PlutusScript _ _ -> panic "TODO alonzo: createScriptWitness: Plutus scripts not supported yet."
 
     Nothing ->
       left $ ShelleyTxCmdScriptLanguageNotSupportedInEra

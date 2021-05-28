@@ -61,19 +61,16 @@ import           Ouroboros.Consensus.Shelley.Eras (StandardShelley)
 import           Ouroboros.Consensus.Shelley.Node (ShelleyGenesisStaking (..))
 import           Ouroboros.Consensus.Shelley.Protocol (StandardCrypto)
 
+import qualified Plutus.V1.Ledger.Api as Plutus
+
+import qualified Cardano.Ledger.Alonzo.Genesis as Alonzo
 import qualified Cardano.Ledger.Alonzo.Language as Alonzo
 import qualified Cardano.Ledger.Alonzo.Scripts as Alonzo
-import           Cardano.Ledger.Alonzo.Translation (AlonzoGenesis (..))
-import qualified Cardano.Ledger.Alonzo.Translation as Alonzo
 import           Cardano.Ledger.Coin (Coin (..))
 import qualified Shelley.Spec.Ledger.API as Ledger
 import qualified Shelley.Spec.Ledger.BaseTypes as Ledger
 import qualified Shelley.Spec.Ledger.Keys as Ledger
 import qualified Shelley.Spec.Ledger.PParams as Shelley
-
--- TODO: Remove me, cli should not depend directly on plutus repo.
-import qualified PlutusCore.Evaluation.Machine.ExBudgeting as Plutus
-import qualified PlutusCore.Evaluation.Machine.ExBudgetingDefaults as Plutus
 
 import           Cardano.Ledger.Era ()
 
@@ -359,13 +356,16 @@ runGenesisCreate (GenesisDir rootdir)
   utxoAddrs <- readInitialFundAddresses utxodir network
   start <- maybe (SystemStart <$> getCurrentTimePlus30) pure mStart
 
-  let finalGenesis = updateTemplate
-                       -- Shelley genesis parameters
-                       start genDlgs mAmount utxoAddrs mempty (Lovelace 0) [] [] template
-                       -- Alono genesis parameters TODO: Parameterize
-                       (Lovelace 10) (Lovelace 1, Lovelace 1) (1,1) (1,1) 1 1 1
+  let (shelleyGenesis, alonzoGenesis) =
+        updateTemplate
+          -- Shelley genesis parameters
+          start genDlgs mAmount utxoAddrs mempty (Lovelace 0) [] [] template
+          -- Alono genesis parameters TODO: Parameterize
+          (Lovelace 10) (Lovelace 1, Lovelace 1) (1,1) (1,1) 1 1 1
 
-  writeShelleyGenesis (rootdir </> "genesis.json") finalGenesis
+  writeFileGenesis (rootdir </> "genesis.json")        shelleyGenesis
+  writeFileGenesis (rootdir </> "genesis.alonzo.json") alonzoGenesis
+  --TODO: rationalise the naming convention on these genesis json files.
   where
     adjustTemplate t = t { sgNetworkMagic = unNetworkMagic (toNetworkMagic network) }
     gendir  = rootdir </> "genesis-keys"
@@ -446,13 +446,18 @@ runGenesisCreateStaked (GenesisDir rootdir)
   let poolMap :: Map (Ledger.KeyHash Ledger.Staking StandardCrypto) (Ledger.PoolParams StandardCrypto)
       poolMap = Map.fromList $ mkDelegationMapEntry <$> delegations
       delegAddrs = dInitialUtxoAddr <$> delegations
-      finalGenesis = updateTemplate
-                       -- Shelley genesis parameters
-                       start genDlgs mNonDlgAmount nonDelegAddrs poolMap stDlgAmount delegAddrs stuffedUtxoAddrs template
-                       -- Alonzo genesis parameters TODO: Parameterize
-                       (Lovelace 10) (Lovelace 1, Lovelace 1) (1,1) (1,1) 1 1 1
+      (shelleyGenesis, alonzoGenesis) =
+        updateTemplate
+          -- Shelley genesis parameters
+          start genDlgs mNonDlgAmount nonDelegAddrs poolMap
+          stDlgAmount delegAddrs stuffedUtxoAddrs template
+          -- Alonzo genesis parameters TODO: Parameterize
+          (Lovelace 10) (Lovelace 1, Lovelace 1) (1,1) (1,1) 1 1 1
 
-  writeShelleyGenesis (rootdir </> "genesis.json") finalGenesis
+  writeFileGenesis (rootdir </> "genesis.json")        shelleyGenesis
+  writeFileGenesis (rootdir </> "genesis.alonzo.json") alonzoGenesis
+  --TODO: rationalise the naming convention on these genesis json files.
+
   liftIO $ Text.putStrLn $ mconcat $
     [ "generated genesis with: "
     , textShow genNumGenesisKeys, " genesis keys, "
@@ -773,23 +778,23 @@ updateTemplate (SystemStart start)
               , sgsStake = Ledger._poolId <$> poolSpecs
               }
           }
-        cModel = case Plutus.extractModelParams Plutus.defaultCostModel of
+        cModel = case Plutus.defaultCekCostModelParams of
                    Just m ->
                      if Alonzo.validateCostModelParams m
                      then Map.singleton Alonzo.PlutusV1 $ Alonzo.CostModel m
                      else panic "updateTemplate: Plutus.defaultCostModel is invalid"
 
                    Nothing -> panic "updateTemplate: Could not extract cost model params from Plutus.defaultCostModel"
-        alonzoGenesis = AlonzoGenesis
-                          { adaPerUTxOWord = toShelleyLovelace adaPerUtxoWrd'
-                          , costmdls = cModel
-                          , prices = Alonzo.Prices (toShelleyLovelace exMem) (toShelleyLovelace exStep)
-                          , maxTxExUnits = Alonzo.ExUnits maxTxMem maxTxStep
-                          , maxBlockExUnits = Alonzo.ExUnits maxBlkMem maxBlkStep
-                          , maxValSize = maxValSize'
-                          , collateralPercentage = collPercent
-                          , maxCollateralInputs = maxColInputs
-                          }
+        alonzoGenesis = Alonzo.AlonzoGenesis
+          { Alonzo.adaPerUTxOWord = toShelleyLovelace adaPerUtxoWrd'
+          , Alonzo.costmdls = cModel
+          , Alonzo.prices = Alonzo.Prices (toShelleyLovelace exMem) (toShelleyLovelace exStep)
+          , Alonzo.maxTxExUnits = Alonzo.ExUnits maxTxMem maxTxStep
+          , Alonzo.maxBlockExUnits = Alonzo.ExUnits maxBlkMem maxBlkStep
+          , Alonzo.maxValSize = maxValSize'
+          , Alonzo.collateralPercentage = collPercent
+          , Alonzo.maxCollateralInputs = maxColInputs
+          }
     (shelleyGenesis, alonzoGenesis)
   where
     nonDelegCoin, delegCoin :: Integer
@@ -827,23 +832,16 @@ updateTemplate (SystemStart start)
     unLovelace :: Integral a => Lovelace -> a
     unLovelace (Lovelace coin) = fromIntegral coin
 
--- We need to include Alonzo genesis parameters
-writeShelleyGenesis
-  :: FilePath
-  -> (ShelleyGenesis StandardShelley, AlonzoGenesis)
+writeFileGenesis
+  :: ToJSON genesis
+  => FilePath
+  -> genesis
   -> ExceptT ShelleyGenesisCmdError IO ()
-writeShelleyGenesis fpath (sg, ag) = do
-  let sgValue = toJSON sg
-      agValue = toJSON ag
-  genesisCombined <- hoistEither $ combineAndEncode sgValue agValue
-  handleIOExceptT
-    (ShelleyGenesisCmdGenesisFileError . FileIOError fpath)
-    $ LBS.writeFile fpath genesisCombined
- where
-  combineAndEncode :: Aeson.Value -> Aeson.Value -> Either ShelleyGenesisCmdError LBS.ByteString
-  combineAndEncode (Object sgO) (Object agO) = Right $ encodePretty $ sgO <> agO
-  combineAndEncode _sgWrong _agWrong = panic "combineAndEncode: Implement ShelleyGenesisCmdError constuctor"
--- -------------------------------------------------------------------------------------------------
+writeFileGenesis fpath genesis =
+  handleIOExceptT (ShelleyGenesisCmdGenesisFileError . FileIOError fpath) $
+    LBS.writeFile fpath (encodePretty genesis)
+
+-- ----------------------------------------------------------------------------
 
 readGenDelegsMap :: FilePath -> FilePath
                  -> ExceptT ShelleyGenesisCmdError IO
@@ -1008,9 +1006,8 @@ readAlonzoGenesis fpath = do
         _                           -> left err
 
  where
-  readAndDecode :: ExceptT ShelleyGenesisCmdError IO AlonzoGenesis
+  readAndDecode :: ExceptT ShelleyGenesisCmdError IO Alonzo.AlonzoGenesis
   readAndDecode = do
       lbs <- handleIOExceptT (ShelleyGenesisCmdGenesisFileError . FileIOError fpath) $ LBS.readFile fpath
       firstExceptT (ShelleyGenesisCmdAesonDecodeError fpath . Text.pack)
         . hoistEither $ Aeson.eitherDecode' lbs
-

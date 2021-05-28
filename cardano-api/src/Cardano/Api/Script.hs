@@ -1,4 +1,5 @@
 {-# LANGUAGE DerivingVia #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -75,9 +76,14 @@ module Cardano.Api.Script (
     fromAlonzoExUnits,
     toShelleyScriptHash,
     fromShelleyScriptHash,
+    toAlonzoScriptData,
+    fromAlonzoScriptData,
+    toAlonzoLanguage,
+    fromAlonzoLanguage,
 
     -- * Data family instances
-    AsType(..)
+    AsType(..),
+    Hash(..),
   ) where
 
 import           Prelude
@@ -114,11 +120,15 @@ import           Cardano.Slotting.Slot (SlotNo)
 
 import qualified Cardano.Ledger.Core as Ledger
 import qualified Cardano.Ledger.Era  as Ledger
+import qualified Cardano.Ledger.SafeHash as Ledger
 
 import qualified Cardano.Ledger.ShelleyMA.Timelocks as Timelock
 import           Ouroboros.Consensus.Shelley.Eras (StandardCrypto)
 import qualified Shelley.Spec.Ledger.Keys as Shelley
 import qualified Shelley.Spec.Ledger.Scripts as Shelley
+
+import qualified Cardano.Ledger.Alonzo.Data as Alonzo
+import qualified Cardano.Ledger.Alonzo.Language as Alonzo
 import qualified Cardano.Ledger.Alonzo.Scripts as Alonzo
 
 import           Cardano.Api.Eras
@@ -292,6 +302,13 @@ instance Aeson.ToJSONKey AnyPlutusScriptVersion where
         toText :: AnyPlutusScriptVersion -> Text
         toText (AnyPlutusScriptVersion PlutusScriptV1) = "PlutusScriptV1"
         toAesonEncoding = Aeson.text . toText
+
+toAlonzoLanguage :: AnyPlutusScriptVersion -> Alonzo.Language
+toAlonzoLanguage (AnyPlutusScriptVersion PlutusScriptV1) = Alonzo.PlutusV1
+
+fromAlonzoLanguage :: Alonzo.Language -> AnyPlutusScriptVersion
+fromAlonzoLanguage Alonzo.PlutusV1 = AnyPlutusScriptVersion PlutusScriptV1
+
 
 class HasTypeProxy lang => IsScriptLanguage lang where
     scriptLanguage :: ScriptLanguage lang
@@ -679,9 +696,38 @@ deriving instance Show (ScriptWitnessInCtx witctx)
 
 type ScriptRedeemer = ScriptData
 
--- TODO Placeholder type to re-present the Alonzo.Data type
+-- TODO alonzo: Placeholder type to re-present the Alonzo.Data type
 data ScriptData = ScriptData
   deriving (Eq, Show)
+
+instance HasTypeProxy ScriptData where
+    data AsType ScriptData = AsScriptData
+    proxyToAsType _ = AsScriptData
+
+toAlonzoScriptData :: ScriptData -> Alonzo.Data ledgerera
+toAlonzoScriptData = error "TODO alonzo: toShelleyScriptData"
+
+fromAlonzoScriptData :: Alonzo.Data ledgerera -> ScriptData
+fromAlonzoScriptData = error "TODO alonzo: fromShelleyScriptData"
+
+
+newtype instance Hash ScriptData =
+    ScriptDataHash (Alonzo.DataHash StandardCrypto)
+  deriving stock (Eq, Ord)
+  deriving (Show, IsString) via UsingRawBytesHex (Hash ScriptData)
+
+instance SerialiseAsRawBytes (Hash ScriptData) where
+    serialiseToRawBytes (ScriptDataHash dh) =
+      Crypto.hashToBytes (Ledger.extractHash dh)
+
+    deserialiseFromRawBytes (AsHash AsScriptData) bs =
+      ScriptDataHash . Ledger.unsafeMakeSafeHash <$> Crypto.hashFromBytes bs
+
+instance ToJSON (Hash ScriptData) where
+    toJSON = toJSON . serialiseToRawBytesHexText
+
+instance Aeson.ToJSONKey (Hash ScriptData) where
+    toJSONKey = Aeson.toJSONKeyText serialiseToRawBytesHexText
 
 
 -- ----------------------------------------------------------------------------
@@ -886,14 +932,14 @@ instance HasTypeProxy lang => SerialiseAsRawBytes (PlutusScript lang) where
     serialiseToRawBytes (PlutusScriptSerialised sbs) = SBS.fromShort sbs
 
     deserialiseFromRawBytes (AsPlutusScript _) bs =
-      -- TODO: validate the script syntax and fail decoding if invalid
+      -- TODO alonzo: validate the script syntax and fail decoding if invalid
       Just (PlutusScriptSerialised (SBS.toShort bs))
 
 instance Typeable lang => ToCBOR (PlutusScript lang) where
     toCBOR (PlutusScriptSerialised sbs) = toCBOR sbs
 
 instance Typeable lang => FromCBOR (PlutusScript lang) where
-    -- TODO: validate the script syntax and fail decoding if invalid
+    -- TODO alonzo: validate the script syntax and fail decoding if invalid
     fromCBOR = PlutusScriptSerialised <$> fromCBOR
 
 instance (HasTypeProxy lang, Typeable lang) =>

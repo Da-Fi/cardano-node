@@ -55,7 +55,7 @@ module Cardano.Api (
     -- ** Hashes
     -- | In Cardano most keys are identified by their hash, and hashes are
     -- used in many other places.
-    Hash(..),
+    Hash,
     castHash,
 
     -- * Payment addresses
@@ -146,8 +146,7 @@ module Cardano.Api (
     -- | Constructing and inspecting transactions
 
     -- ** Transaction bodies
-    TxBody,
-    getTransactionBodyContent,
+    TxBody(TxBody),
     makeTransactionBody,
     TxBodyContent(..),
     TxBodyError(..),
@@ -164,6 +163,7 @@ module Cardano.Api (
     TxOut(TxOut),
     TxOutValue(..),
     serialiseAddressForTxOut,
+    TxOutDatumHash(..),
 
     -- ** Other transaction body types
     TxFee(..),
@@ -173,6 +173,8 @@ module Cardano.Api (
     EpochSlots(..),
     TxMetadataInEra(..),
     TxAuxScripts(..),
+    TxAuxScriptData(..),
+    TxExtraKeyWitnesses(..),
     TxWithdrawals(..),
     TxCertificates(..),
     TxUpdateProposal(..),
@@ -193,6 +195,7 @@ module Cardano.Api (
     ValidityLowerBoundSupportedInEra(..),
     TxMetadataSupportedInEra(..),
     AuxScriptsSupportedInEra(..),
+    TxExtraKeyWitnessesSupportedInEra(..),
     WithdrawalsSupportedInEra(..),
     CertificatesSupportedInEra(..),
     UpdateProposalSupportedInEra(..),
@@ -205,6 +208,7 @@ module Cardano.Api (
     validityLowerBoundSupportedInEra,
     txMetadataSupportedInEra,
     auxScriptsSupportedInEra,
+    extraKeyWitnessesSupportedInEra,
     withdrawalsSupportedInEra,
     certificatesSupportedInEra,
     updateProposalSupportedInEra,
@@ -223,7 +227,6 @@ module Cardano.Api (
     makeSignedTransaction,
     KeyWitness,
     makeByronKeyWitness,
-    makeByronTransaction,
     ShelleyWitnessSigningKey(..),
     makeShelleyKeyWitness,
     makeShelleyBootstrapWitness,
