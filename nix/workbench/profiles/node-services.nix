@@ -40,6 +40,7 @@ let
           shelley = { Shelley = 0; };
           allegra = { Shelley = 0; Allegra = 0; };
           mary    = { Shelley = 0; Allegra = 0; Mary = 0; };
+          alonzo  = { Shelley = 0; Allegra = 0; Mary = 0; Alonzo = 0; };
         }.${profile.value.era};
 
       nodeConfig =
@@ -75,7 +76,8 @@ let
                LastKnownBlockVersion-Minor = 0;
                LastKnownBlockVersion-Alt   = 0;
              })
-           [ "ByronGenesisHash"
+           [ "AlonzoGenesisHash"
+             "ByronGenesisHash"
              "ShelleyGenesisHash"
            ])
        //

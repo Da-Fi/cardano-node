@@ -6,7 +6,6 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE ViewPatterns #-}
 
@@ -52,8 +51,6 @@ import           Data.Foldable (Foldable (toList))
 import           Cardano.Slotting.Block (BlockNo)
 import           Cardano.Slotting.Slot (EpochNo, SlotNo)
 
-import qualified Ouroboros.Network.Block as Consensus
-
 import qualified Cardano.Crypto.Hash.Class
 import qualified Cardano.Crypto.Hashing
 import qualified Ouroboros.Consensus.Block as Consensus
@@ -64,12 +61,12 @@ import qualified Ouroboros.Consensus.HardFork.Combinator as Consensus
 import qualified Ouroboros.Consensus.HardFork.Combinator.Degenerate as Consensus
 import qualified Ouroboros.Consensus.Shelley.Ledger as Consensus
 import qualified Ouroboros.Consensus.Shelley.ShelleyHFC as Consensus
+import qualified Ouroboros.Network.Block as Consensus
 
 import qualified Cardano.Chain.Block as Byron
 import qualified Cardano.Chain.UTxO as Byron
 import qualified Cardano.Ledger.Era as Ledger
 import qualified Shelley.Spec.Ledger.BlockChain as Ledger
-import qualified Shelley.Spec.Ledger.API.Mempool as Ledger
 
 import           Cardano.Api.Eras
 import           Cardano.Api.HasTypeProxy
@@ -78,8 +75,8 @@ import           Cardano.Api.Modes
 import           Cardano.Api.SerialiseRaw
 import           Cardano.Api.Tx
 
-{-# ANN module ("HLint: ignore Use lambda" :: String) #-}
-
+{- HLINT ignore "Use lambda" -}
+{- HLINT ignore "Use lambda-case" -}
 
 -- ----------------------------------------------------------------------------
 -- Blocks in an era
@@ -159,8 +156,8 @@ getShelleyBlockTxs :: forall era ledgerera.
                    -> Ledger.Block ledgerera
                    -> [Tx era]
 getShelleyBlockTxs era (Ledger.Block _header txs) =
-    [ ShelleyTx era (Ledger.extractTx txinblock)
-    | txinblock <- toList (Ledger.fromTxSeq @ledgerera txs) ]
+  [ ShelleyTx era txinblock
+  | txinblock <- toList (Ledger.fromTxSeq txs) ]
 
 obtainConsensusShelleyBasedEra
   :: forall era ledgerera a.

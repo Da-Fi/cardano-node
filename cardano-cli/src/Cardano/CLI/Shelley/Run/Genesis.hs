@@ -1,6 +1,7 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
@@ -42,8 +43,6 @@ import qualified Cardano.Crypto.Hash as Hash
 import qualified Cardano.Crypto.Random as Crypto
 import           Crypto.Random as Crypto
 
-import           Cardano.Ledger.Crypto (ADDRHASH, Crypto)
-
 import           System.Directory (createDirectoryIfMissing, listDirectory)
 import           System.FilePath (takeExtension, takeExtensions, (</>))
 import           System.IO.Error (isDoesNotExistError)
@@ -59,19 +58,17 @@ import           Cardano.Api.Shelley
 import           Ouroboros.Consensus.BlockchainTime (SystemStart (..))
 import           Ouroboros.Consensus.Shelley.Eras (StandardShelley)
 import           Ouroboros.Consensus.Shelley.Node (ShelleyGenesisStaking (..))
-import           Ouroboros.Consensus.Shelley.Protocol (StandardCrypto)
-
-import qualified Plutus.V1.Ledger.Api as Plutus
 
 import qualified Cardano.Ledger.Alonzo.Genesis as Alonzo
 import qualified Cardano.Ledger.Alonzo.Language as Alonzo
 import qualified Cardano.Ledger.Alonzo.Scripts as Alonzo
+import qualified Cardano.Ledger.BaseTypes as Ledger
 import           Cardano.Ledger.Coin (Coin (..))
+import qualified Cardano.Ledger.Keys as Ledger
 import qualified Shelley.Spec.Ledger.API as Ledger
-import qualified Shelley.Spec.Ledger.BaseTypes as Ledger
-import qualified Shelley.Spec.Ledger.Keys as Ledger
 import qualified Shelley.Spec.Ledger.PParams as Shelley
 
+import           Cardano.Ledger.Crypto (ADDRHASH, Crypto, StandardCrypto)
 import           Cardano.Ledger.Era ()
 
 import           Cardano.CLI.Helpers (textShow)
@@ -86,6 +83,7 @@ import           Cardano.CLI.Shelley.Run.Pool (ShelleyPoolCmdError (..), renderS
 import           Cardano.CLI.Shelley.Run.StakeAddress (ShelleyStakeAddressCmdError (..),
                    renderShelleyStakeAddressCmdError, runStakeAddressKeyGen)
 import           Cardano.CLI.Types
+import           Plutus.V1.Ledger.Api (defaultCostModelParams)
 
 {- HLINT ignore "Reduce duplication" -}
 
@@ -360,8 +358,15 @@ runGenesisCreate (GenesisDir rootdir)
         updateTemplate
           -- Shelley genesis parameters
           start genDlgs mAmount utxoAddrs mempty (Lovelace 0) [] [] template
-          -- Alono genesis parameters TODO: Parameterize
-          (Lovelace 10) (Lovelace 1, Lovelace 1) (1,1) (1,1) 1 1 1
+          -- Alonzo genesis parameters
+          -- TODO alonzo: parameterize these, don't just use defaults
+          alonzoGenesisDefaultLovelacePerUtxoWord
+          alonzoGenesisDefaultExecutionPrices
+          alonzoGenesisDefaultMaxTxExecutionUnits
+          alonzoGenesisDefaultMaxBlockExecutionUnits
+          alonzoGenesisDefaultMaxValueSize
+          alonzoGenesisDefaultCollateralPercent
+          alonzoGenesisDefaultMaxCollateralInputs
 
   writeFileGenesis (rootdir </> "genesis.json")        shelleyGenesis
   writeFileGenesis (rootdir </> "genesis.alonzo.json") alonzoGenesis
@@ -451,8 +456,15 @@ runGenesisCreateStaked (GenesisDir rootdir)
           -- Shelley genesis parameters
           start genDlgs mNonDlgAmount nonDelegAddrs poolMap
           stDlgAmount delegAddrs stuffedUtxoAddrs template
-          -- Alonzo genesis parameters TODO: Parameterize
-          (Lovelace 10) (Lovelace 1, Lovelace 1) (1,1) (1,1) 1 1 1
+          -- Alonzo genesis parameters
+          -- TODO alonzo: parameterize these, don't just use defaults
+          alonzoGenesisDefaultLovelacePerUtxoWord
+          alonzoGenesisDefaultExecutionPrices
+          alonzoGenesisDefaultMaxTxExecutionUnits
+          alonzoGenesisDefaultMaxBlockExecutionUnits
+          alonzoGenesisDefaultMaxValueSize
+          alonzoGenesisDefaultCollateralPercent
+          alonzoGenesisDefaultMaxCollateralInputs
 
   writeFileGenesis (rootdir </> "genesis.json")        shelleyGenesis
   writeFileGenesis (rootdir </> "genesis.alonzo.json") alonzoGenesis
@@ -625,7 +637,7 @@ buildPool nw dir index = do
       , Ledger._poolVrf    = Ledger.hashVerKeyVRF poolVrfVK
       , Ledger._poolPledge = Ledger.Coin 0
       , Ledger._poolCost   = Ledger.Coin 0
-      , Ledger._poolMargin = Ledger.truncateUnitInterval 0
+      , Ledger._poolMargin = minBound
       , Ledger._poolRAcnt  =
           toShelleyStakeAddr $ makeStakeAddress nw $ StakeCredentialByKey (verificationKeyHash rewardsSVK)
       , Ledger._poolOwners = mempty
@@ -739,26 +751,19 @@ updateTemplate
     -> [AddressInEra ShelleyEra]
     -> ShelleyGenesis StandardShelley
     -- Alonzo genesis parameters
-    -> Lovelace
-    -- ^ Ada per UTxO word
-    -> (Lovelace, Lovelace)
-    -- ^ Execution prices (memory, steps)
-    -> (Word64, Word64)
-    -- ^ Max Tx execution units
-    -> (Word64, Word64)
-    -- ^ Max block execution units
-    -> Natural
-    -- ^ Max value size
-    -> Natural
-    -- ^ Collateral percentage
-    -> Natural
-    -- ^ Max collateral inputs
+    -> Lovelace            -- ^ Ada per UTxO word
+    -> ExecutionUnitPrices -- ^ Execution prices (memory, steps)
+    -> ExecutionUnits      -- ^ Max Tx execution units
+    -> ExecutionUnits      -- ^ Max block execution units
+    -> Natural             -- ^ Max value size
+    -> Natural             -- ^ Collateral percentage
+    -> Natural             -- ^ Max collateral inputs
     -> (ShelleyGenesis StandardShelley, Alonzo.AlonzoGenesis)
 updateTemplate (SystemStart start)
                genDelegMap mAmountNonDeleg utxoAddrsNonDeleg
                poolSpecs (Lovelace amountDeleg) utxoAddrsDeleg stuffedUtxoAddrs
-               template  adaPerUtxoWrd' (exMem,exStep) (maxTxMem, maxTxStep)
-               (maxBlkMem, maxBlkStep) maxValSize' collPercent maxColInputs = do
+               template coinsPerUTxOWord prices maxTxExUnits maxBlockExUnits
+               maxValueSize collateralPercentage maxCollateralInputs = do
 
     let shelleyGenesis = template
           { sgSystemStart = start
@@ -778,22 +783,27 @@ updateTemplate (SystemStart start)
               , sgsStake = Ledger._poolId <$> poolSpecs
               }
           }
-        cModel = case Plutus.defaultCekCostModelParams of
-                   Just m ->
+        cModel = case Alonzo.CostModel <$> defaultCostModelParams of
+                   Just (Alonzo.CostModel m) ->
                      if Alonzo.validateCostModelParams m
-                     then Map.singleton Alonzo.PlutusV1 $ Alonzo.CostModel m
-                     else panic "updateTemplate: Plutus.defaultCostModel is invalid"
+                     then Map.singleton Alonzo.PlutusV1 (Alonzo.CostModel m)
+                     else panic "updateTemplate: defaultCostModel is invalid"
 
-                   Nothing -> panic "updateTemplate: Could not extract cost model params from Plutus.defaultCostModel"
+                   Nothing -> panic "updateTemplate: Could not extract cost model params from defaultCostModel"
+        --TODO: we need a better validation story. We also ought to wrap the
+        -- genesis type in the API properly.
+        prices' = case toAlonzoPrices prices of
+                    Nothing -> panic "updateTemplate: invalid prices"
+                    Just p  -> p
         alonzoGenesis = Alonzo.AlonzoGenesis
-          { Alonzo.adaPerUTxOWord = toShelleyLovelace adaPerUtxoWrd'
-          , Alonzo.costmdls = cModel
-          , Alonzo.prices = Alonzo.Prices (toShelleyLovelace exMem) (toShelleyLovelace exStep)
-          , Alonzo.maxTxExUnits = Alonzo.ExUnits maxTxMem maxTxStep
-          , Alonzo.maxBlockExUnits = Alonzo.ExUnits maxBlkMem maxBlkStep
-          , Alonzo.maxValSize = maxValSize'
-          , Alonzo.collateralPercentage = collPercent
-          , Alonzo.maxCollateralInputs = maxColInputs
+          { Alonzo.coinsPerUTxOWord     = toShelleyLovelace coinsPerUTxOWord
+          , Alonzo.costmdls             = cModel
+          , Alonzo.prices               = prices'
+          , Alonzo.maxTxExUnits         = toAlonzoExUnits maxTxExUnits
+          , Alonzo.maxBlockExUnits      = toAlonzoExUnits maxBlockExUnits
+          , Alonzo.maxValSize           = maxValueSize
+          , Alonzo.collateralPercentage = collateralPercentage
+          , Alonzo.maxCollateralInputs  = maxCollateralInputs
           }
     (shelleyGenesis, alonzoGenesis)
   where
@@ -989,10 +999,40 @@ runGenesisHashFile (GenesisFile fpath) = do
 -- Alonzo genesis
 --
 
--- | In order to avoid introducing a separate Alonzo genesis file, we
--- have added additional fields to the Shelley genesis that are required
--- when hardforking to Alonzo. Unfortunately the 'ShelleyGenesis' 'FromJSON'
--- instance exists in cardano-ledger-specs so we must duplicate code for now.
+
+alonzoGenesisDefaultLovelacePerUtxoWord :: Lovelace
+alonzoGenesisDefaultLovelacePerUtxoWord = Lovelace 1
+
+alonzoGenesisDefaultExecutionPrices :: ExecutionUnitPrices
+alonzoGenesisDefaultExecutionPrices =
+    ExecutionUnitPrices {
+       priceExecutionSteps  = 1 % 10,
+       priceExecutionMemory = 1 % 10
+    }
+
+alonzoGenesisDefaultMaxTxExecutionUnits :: ExecutionUnits
+alonzoGenesisDefaultMaxTxExecutionUnits =
+    ExecutionUnits {
+      executionSteps  = 500_000_000_000,
+      executionMemory = 500_000_000_000
+    }
+
+alonzoGenesisDefaultMaxBlockExecutionUnits :: ExecutionUnits
+alonzoGenesisDefaultMaxBlockExecutionUnits =
+    ExecutionUnits {
+      executionSteps  = 500_000_000_000,
+      executionMemory = 500_000_000_000
+    }
+
+alonzoGenesisDefaultMaxValueSize :: Natural
+alonzoGenesisDefaultMaxValueSize = 4000
+
+alonzoGenesisDefaultCollateralPercent :: Natural
+alonzoGenesisDefaultCollateralPercent = 1 --TODO change to 100%
+
+alonzoGenesisDefaultMaxCollateralInputs :: Natural
+alonzoGenesisDefaultMaxCollateralInputs = 5
+
 
 readAlonzoGenesis
   :: FilePath

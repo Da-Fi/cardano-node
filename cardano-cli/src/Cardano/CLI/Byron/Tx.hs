@@ -17,6 +17,8 @@ module Cardano.CLI.Byron.Tx
     --TODO: remove when they are exported from the ledger
   , fromCborTxAux
   , toCborTxAux
+
+  , ScriptValidity(..)
   )
 where
 
@@ -152,6 +154,7 @@ txSpendGenesisUTxOByronPBFT gc nId sk (ByronAddress bAddr) outs = do
             [ (fromByronTxIn txIn
               , BuildTxWith (KeyWitness KeyWitnessForSpending))
             ]
+            TxInsCollateralNone
             outs
             (TxFeeImplicit TxFeesImplicitInByronEra)
             ( TxValidityNoLowerBound
@@ -159,12 +162,14 @@ txSpendGenesisUTxOByronPBFT gc nId sk (ByronAddress bAddr) outs = do
             )
             TxMetadataNone
             TxAuxScriptsNone
+            (BuildTxWith TxExtraScriptDataNone)
             TxExtraKeyWitnessesNone
             (BuildTxWith Nothing)
             TxWithdrawalsNone
             TxCertificatesNone
             TxUpdateProposalNone
             TxMintNone
+            (BuildTxWith TxScriptValidityNone)
     case makeTransactionBody txBodyCont of
       Left err -> error $ "Error occured while creating a Byron genesis based UTxO transaction: " <> show err
       Right txBody -> let bWit = fromByronWitness sk nId txBody
@@ -189,6 +194,7 @@ txSpendUTxOByronPBFT nId sk txIns outs = do
                        , BuildTxWith (KeyWitness KeyWitnessForSpending)
                        ) | txIn <- txIns
                      ]
+                     TxInsCollateralNone
                      outs
                      (TxFeeImplicit TxFeesImplicitInByronEra)
                      ( TxValidityNoLowerBound
@@ -196,12 +202,14 @@ txSpendUTxOByronPBFT nId sk txIns outs = do
                      )
                      TxMetadataNone
                      TxAuxScriptsNone
+                     (BuildTxWith TxExtraScriptDataNone)
                      TxExtraKeyWitnessesNone
                      (BuildTxWith Nothing)
                      TxWithdrawalsNone
                      TxCertificatesNone
                      TxUpdateProposalNone
                      TxMintNone
+                     (BuildTxWith TxScriptValidityNone)
   case makeTransactionBody txBodyCont of
     Left err -> error $ "Error occured while creating a Byron genesis based UTxO transaction: " <> show err
     Right txBody -> let bWit = fromByronWitness sk nId txBody

@@ -7,7 +7,9 @@ in
 , withHoogle ? defaultCustomConfig.withHoogle
 , clusterProfile ? defaultCustomConfig.localCluster.profileName
 , autoStartCluster ? defaultCustomConfig.localCluster.autoStartCluster
+, autoStartClusterArgs ? ""
 , workbenchDevMode ? defaultCustomConfig.localCluster.workbenchDevMode
+, withR ? false
 , customConfig ? {
     inherit withHoogle;
     localCluster =  {
@@ -22,17 +24,19 @@ in
 with pkgs;
 let
   inherit (pkgs) customConfig;
-  inherit (customConfig) withHoogle localCluster;
+  inherit (customConfig) withHoogle localCluster withR;
   inherit (localCluster) autoStartCluster workbenchDevMode;
   commandHelp =
     ''
       echo "
         Commands:
-          * nix flake update --update-input <iohkNix|haskellNix> - update input
+          * nix flake lock --update-input <iohkNix|haskellNix> - update nix build input
           * cardano-cli - used for key generation and other operations tasks
           * wb - cluster workbench
           * start-cluster - start a local development cluster
           * stop-cluster - stop a local development cluster
+          * restart-cluster - restart the last cluster run (in 'run/current')
+                              (WARNING: logs & node DB will be wiped clean)
 
       "
     '';
@@ -45,7 +49,7 @@ let
       export LOCALE_ARCHIVE="${pkgs.glibcLocales}/lib/locale/locale-archive"
     '';
 
-  haveGlibcLocales = pkgs.glibcLocales != null && stdenv.hostPlatform.libc == "glibc";        
+  haveGlibcLocales = pkgs.glibcLocales != null && stdenv.hostPlatform.libc == "glibc";
 
   # This provides a development environment that can be used with nix-shell or
   # lorri. See https://input-output-hk.github.io/haskell.nix/user-guide/development/
@@ -56,8 +60,13 @@ let
     { useCabalRun }:
     callPackage ./nix/supervisord-cluster
       { inherit useCabalRun;
+        inherit (localCluster) profileName;
         workbench = pkgs.callPackage ./nix/workbench { inherit useCabalRun; };
       };
+
+  rstudio = pkgs.rstudioWrapper.override {
+    packages = with pkgs.rPackages; [ car dplyr ggplot2 reshape2 ];
+  };
 
   shell =
     let cluster = mkCluster { useCabalRun = true; };
@@ -71,7 +80,8 @@ let
     tools = {
       haskell-language-server = {
         version = "latest";
-        inherit (cardanoNodeProject) index-state;
+        index-state = "2021-06-22T00:00:00Z";
+        # inherit (cardanoNodeProject) index-state;
       };
     };
 
@@ -91,18 +101,25 @@ let
       tmux
       pkgs.git
       pkgs.hlint
+      pkgs.moreutils
     ] ++ lib.optional haveGlibcLocales pkgs.glibcLocales
     ## Workbench's main script is called directly in dev mode.
     ++ lib.optionals (!workbenchDevMode)
     [
       cluster.workbench.workbench
     ]
+    ++ lib.optionals withR
+    [
+      rstudio
+    ]
     ## Local cluster not available on Darwin,
     ## because psmisc fails to build on Big Sur.
     ++ lib.optionals (!stdenv.isDarwin)
     [
+      pkgs.psmisc
       cluster.start
       cluster.stop
+      cluster.restart
     ];
 
     # Prevents cabal from choosing alternate plans, so that
@@ -110,6 +127,8 @@ let
     exactDeps = true;
 
     shellHook = ''
+      echo 'nix-shell options & flags:  withHoogle=${toString withHoogle} clusterProfile=${clusterProfile} autoStartCluster=${toString autoStartCluster} workbenchDevMode=${toString workbenchDevMode}'
+
       ${cluster.workbench.shellHook}
 
       ${lib.optionalString autoStartCluster ''
@@ -127,7 +146,7 @@ let
 
       ${lib.optionalString autoStartCluster ''
       echo "workbench:  starting cluster (because 'autoStartCluster' is true):"
-      start-cluster
+      start-cluster ${autoStartClusterArgs}
       ''}
 
       ${commandHelp}
@@ -138,20 +157,32 @@ let
 
   devops =
     let cluster = mkCluster { useCabalRun = false; };
-    in stdenv.mkDerivation {
+    in cardanoNodeProject.shellFor {
     name = "devops-shell";
+
+    packages = _: [];
+
     nativeBuildInputs = [
       nixWrapped
       cardano-cli
       bech32
+      cardano-ping
       cardano-node
       python3Packages.supervisor
       python3Packages.ipython
       cluster.start
       cluster.stop
+      cluster.restart
       cardanolib-py
       cluster.workbench.workbench
-    ];
+    ] ++ (lib.optionals (!stdenv.isDarwin) [
+      psmisc
+    ]);
+
+    # Prevents cabal from choosing alternate plans, so that
+    # *all* dependencies are provided by Nix.
+    exactDeps = true;
+
     shellHook = ''
       echo "DevOps Tools" \
       | ${figlet}/bin/figlet -f banner -c \

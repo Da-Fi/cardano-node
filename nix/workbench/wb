@@ -12,9 +12,11 @@ global_mode='unknown'
 . "$global_basedir"/genesis.sh
 . "$global_basedir"/topology.sh
 . "$global_basedir"/run.sh
+. "$global_basedir"/analyse.sh
 . "$global_basedir"/explain-mode.sh
 
 . "$global_basedir"/backend.sh
+. "$global_basedir"/supervisor.sh
 
 usage_main() {
     test $# -lt 1 ||
@@ -26,6 +28,7 @@ usage_main() {
     profile      (p)      Cluster profile ops.  Default op is 'list'
     cluster      (c)      Cluster state ops
     run          (r)      Managing cluster runs.  Default op is 'list'
+    analyse      (a)      Analyse cluster runs
 
     explain-mode (x)      Explain current mode
 
@@ -41,6 +44,7 @@ usage_extra() {
     cat >&2 <<EOF
   Other OPs:
 
+    reanalyse    (rea)    Re-analyse a cluster run (synonym for analyse --re)
     call ARGS..           Call internal functions with arguments
     mode                  Report mode set by --set-mode
 
@@ -85,11 +89,16 @@ main() {
         run | runs | r )
             run "$@";;
 
+        analyse | a )
+            analyse "$@";;
+
         explain-mode | x )
             explain-mode $global_mode;;
 
         ## Internals:
         #
+        reanalyse | rea | re )
+            analyse --reanalyse "$@";;
         backend )
             backend "$@";;
         call )

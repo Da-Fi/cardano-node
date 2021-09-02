@@ -27,7 +27,7 @@ import qualified Cardano.Chain.UTxO as Byron
 import           Cardano.Ledger.Shelley as Ledger (ShelleyEra)
 import           Cardano.Ledger.ShelleyMA (MaryOrAllegra (Allegra, Mary), ShelleyMAEra)
 import qualified Cardano.Ledger.ShelleyMA.TxBody as ShelleyMA
-import           Ouroboros.Consensus.Shelley.Protocol.Crypto (StandardCrypto)
+import           Cardano.Ledger.Crypto (StandardCrypto)
 import           Shelley.Spec.Ledger.API (Addr (..), TxOut (TxOut))
 import qualified Shelley.Spec.Ledger.API as Shelley
 
@@ -44,13 +44,13 @@ friendlyTxBody era txbody =
     <>
     case txbody of
       ByronTxBody body -> friendlyTxBodyByron body
-      ShelleyTxBody ShelleyBasedEraShelley body _scripts _ aux ->
+      ShelleyTxBody ShelleyBasedEraShelley body _scripts _ aux _ ->
         addAuxData aux $ friendlyTxBodyShelley body
-      ShelleyTxBody ShelleyBasedEraAllegra body _scripts _ aux ->
+      ShelleyTxBody ShelleyBasedEraAllegra body _scripts _ aux _ ->
         addAuxData aux $ friendlyTxBodyAllegra body
-      ShelleyTxBody ShelleyBasedEraMary body _scripts _ aux ->
+      ShelleyTxBody ShelleyBasedEraMary body _scripts _ aux _ ->
         addAuxData aux $ friendlyTxBodyMary body
-      ShelleyTxBody ShelleyBasedEraAlonzo _ _ _ _ ->
+      ShelleyTxBody ShelleyBasedEraAlonzo _ _ _ _ _ ->
         panic "friendlyTxBody: Alonzo not implemented yet" -- TODO alonzo
 
 addAuxData :: Show a => Maybe a -> Object -> Object

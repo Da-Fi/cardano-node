@@ -7,7 +7,7 @@
 , haskell-nix
 , buildPackages
 # GHC attribute name
-, compiler
+, compiler-nix-name
 # Enable profiling
 , profiling ? false
 # Link with -eventlog
@@ -16,7 +16,7 @@
 , assertedPackages ? []
 # Version info, to be passed when not building from a git work tree
 , gitrev ? null
-, libsodium ? pkgs.libsodium
+, libsodium-vrf ? pkgs.libsodium-vrf
 , src ? (haskell-nix.haskellLib.cleanGit {
       name = "cardano-node-src";
       src = ../.;
@@ -35,8 +35,7 @@
 
 , projectPackages ? lib.attrNames (haskell-nix.haskellLib.selectProjectPackages
     (haskell-nix.cabalProject' {
-      inherit src cabalProjectLocal;
-      compiler-nix-name = compiler;
+      inherit src cabalProjectLocal compiler-nix-name;
     }).hsPkgs)
 }:
 let
@@ -44,8 +43,7 @@ let
   # This creates the Haskell package set.
   # https://input-output-hk.github.io/haskell.nix/user-guide/projects/
   pkgSet = haskell-nix.cabalProject' ({
-    inherit src cabalProjectLocal;
-    compiler-nix-name = compiler;
+    inherit src cabalProjectLocal compiler-nix-name;
     modules = [
       # Allow reinstallation of Win32
       ({ pkgs, ... }: lib.mkIf pkgs.stdenv.hostPlatform.isWindows {
@@ -71,6 +69,14 @@ let
           lib.mkForce [buildPackages.jq buildPackages.coreutils buildPackages.shellcheck];
         packages.cardano-cli.components.tests.cardano-cli-golden.build-tools =
           lib.mkForce [buildPackages.jq buildPackages.coreutils buildPackages.shellcheck];
+        packages.cardano-testnet.components.tests.cardano-testnet-tests.build-tools =
+          lib.mkForce [buildPackages.jq buildPackages.coreutils buildPackages.shellcheck];
+      }
+      {
+        # Use the VRF fork of libsodium
+        packages = lib.genAttrs [ "cardano-crypto-praos" "cardano-crypto-class" ] (_: {
+          components.library.pkgconfig = lib.mkForce [ [ libsodium-vrf ] ];
+        });
       }
       {
         # make sure that libsodium DLLs are available for windows binaries:
@@ -84,7 +90,7 @@ let
       }
       {
         # Stamp executables with the git revision and add shell completion
-        packages = lib.genAttrs ["cardano-node" "cardano-cli" "cardano-topology"] (name: {
+        packages = lib.genAttrs ["cardano-node" "cardano-cli" "cardano-topology" "locli" ] (name: {
           components.exes.${name}.postInstall = ''
             ${lib.optionalString stdenv.hostPlatform.isWindows setLibSodium}
             ${setGitRev}
@@ -103,11 +109,22 @@ let
         # does not require any messing with cabal files.
         packages.katip.doExactConfig = true;
 
+        # we need the following shared libraries for the musl build to succeed
+        # musl on x86_64, can load dynamic libraries, and we need it to use the
+        # shared loader, as the one in GHC is not very stable.
+        packages.cardano-api.components.library.enableShared = true;
+        packages.cardano-config.components.library.enableShared = true;
+        packages.cardano-node.components.library.enableShared = true;
+        packages.cardano-cli.components.library.enableShared = true;
+
         # split data output for ekg to reduce closure size
         packages.ekg.components.library.enableSeparateDataOutput = true;
 
         # cardano-cli-test depends on cardano-cli
-        packages.cardano-cli.preCheck = "export CARDANO_CLI=${config.hsPkgs.cardano-cli.components.exes.cardano-cli}/bin/cardano-cli${pkgs.stdenv.hostPlatform.extensions.executable}";
+        packages.cardano-cli.preCheck = "
+          export CARDANO_CLI=${config.hsPkgs.cardano-cli.components.exes.cardano-cli}/bin/cardano-cli${pkgs.stdenv.hostPlatform.extensions.executable}
+          export CARDANO_NODE_SRC=${src}
+        ";
 
         packages.cardano-node-chairman.components.tests.chairman-tests.build-tools =
           lib.mkForce [
@@ -122,6 +139,21 @@ let
           export CARDANO_NODE_CHAIRMAN=${config.hsPkgs.cardano-node-chairman.components.exes.cardano-node-chairman}/bin/cardano-node-chairman${pkgs.stdenv.hostPlatform.extensions.executable}
           export CARDANO_NODE_SRC=${src}
         ";
+
+        # cardano-testnet needs access to the git repository source
+        packages.cardano-testnet.preCheck = "
+          export CARDANO_CLI=${config.hsPkgs.cardano-cli.components.exes.cardano-cli}/bin/cardano-cli${pkgs.stdenv.hostPlatform.extensions.executable}
+          export CARDANO_NODE=${config.hsPkgs.cardano-node.components.exes.cardano-node}/bin/cardano-node${pkgs.stdenv.hostPlatform.extensions.executable}
+          export CARDANO_SUBMIT_API=${config.hsPkgs.cardano-submit-api.components.exes.cardano-submit-api}/bin/cardano-submit-api${pkgs.stdenv.hostPlatform.extensions.executable}
+          export CARDANO_NODE_SRC=${src}
+        ";
+      })
+      ({ pkgs, ... }: lib.mkIf (!pkgs.stdenv.hostPlatform.isDarwin) {
+        # Needed for profiled builds to fix an issue loading recursion-schemes part of makeBaseFunctor
+        # that is missing from the `_p` output.  See https://gitlab.haskell.org/ghc/ghc/-/issues/18320
+        # This work around currently breaks regular builds on macOS with:
+        # <no location info>: error: ghc: ghc-iserv terminated (-11)
+        packages.plutus-core.components.library.ghcOptions = [ "-fexternal-interpreter" ];
       })
       {
         packages = lib.genAttrs projectPackages
@@ -134,6 +166,8 @@ let
       (lib.optionalAttrs profiling {
         enableLibraryProfiling = true;
         packages.cardano-node.components.exes.cardano-node.enableExecutableProfiling = true;
+        packages.tx-generator.components.exes.tx-generator.enableExecutableProfiling = true;
+        packages.locli.components.exes.locli.enableExecutableProfilig = true;
       })
       {
         packages = lib.genAttrs assertedPackages
@@ -177,7 +211,7 @@ let
   # the revision is sourced from the local git work tree.
   setGitRev = ''${buildPackages.haskellBuildUtils}/bin/set-git-rev "${gitrev}" $out/bin/*'';
   # package with libsodium:
-  setLibSodium = "ln -s ${libsodium}/bin/libsodium-23.dll $out/bin/libsodium-23.dll";
+  setLibSodium = "ln -s ${libsodium-vrf}/bin/libsodium-23.dll $out/bin/libsodium-23.dll";
 in
   pkgSet // {
     inherit projectPackages;

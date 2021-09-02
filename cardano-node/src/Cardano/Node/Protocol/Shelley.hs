@@ -30,16 +30,17 @@ import           Control.Monad.Trans.Except.Extra (firstExceptT, handleIOExceptT
                    newExceptT)
 
 import qualified Cardano.Crypto.Hash.Class as Crypto
+import           Cardano.Ledger.Crypto (StandardCrypto)
+import           Cardano.Ledger.Keys (coerceKeyRole)
 
 import qualified Ouroboros.Consensus.Cardano as Consensus
-
+import qualified Ouroboros.Consensus.Mempool.TxLimits as TxLimits
 import           Ouroboros.Consensus.Shelley.Eras (StandardShelley)
 import           Ouroboros.Consensus.Shelley.Node (Nonce (..), ProtocolParamsShelley (..),
                    ProtocolParamsShelleyBased (..), TPraosLeaderCredentials (..))
-import           Ouroboros.Consensus.Shelley.Protocol (StandardCrypto, TPraosCanBeLeader (..))
+import           Ouroboros.Consensus.Shelley.Protocol (TPraosCanBeLeader (..))
 
 import qualified Shelley.Spec.Ledger.Genesis as Shelley
-import           Shelley.Spec.Ledger.Keys (coerceKeyRole)
 import           Shelley.Spec.Ledger.PParams (ProtVer (..))
 
 import qualified Cardano.Api as Api (FileError (..))
@@ -90,7 +91,9 @@ mkSomeConsensusProtocolShelley NodeShelleyProtocolConfiguration {
       }
       Consensus.ProtocolParamsShelley {
         shelleyProtVer =
-          ProtVer 2 0
+          ProtVer 2 0,
+        shelleyMaxTxCapacityOverrides =
+          TxLimits.mkOverrides TxLimits.noOverridesMeasure
       }
 
 genesisHashToPraosNonce :: GenesisHash -> Nonce
@@ -271,8 +274,8 @@ instance Error GenesisReadError where
      <> toS fp <> " Error: " <> show err
 
   displayError (GenesisHashMismatch actual expected) =
-        "Wrong Shelley genesis file: the actual hash is " <> show actual
-     <> ", but the expected Shelley genesis hash given in the node "
+        "Wrong genesis file: the actual hash is " <> show actual
+     <> ", but the expected genesis hash given in the node "
      <> "configuration file is " <> show expected
 
   displayError (GenesisDecodeError fp err) =

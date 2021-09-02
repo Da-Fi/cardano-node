@@ -1,9 +1,19 @@
 .. raw:: html
 
-   <p align="center">
-     <a href="https://github.com/input-output-hk/cardano-node/releases"><img src="https://img.shields.io/github/release-pre/input-output-hk/cardano-node.svg?style=for-the-badge" /></a>
-     <a href="https://buildkite.com/input-output-hk/cardano-node"><img src="https://img.shields.io/buildkite/a978cbb4def7018be3d0a004127da356f4db32f1c318c1a48a/master?label=BUILD&style=for-the-badge"/></a>
-   </p>
+  <p align="center">
+    <a href="https://github.com/input-output-hk/cardano-node/releases"><img src="https://img.shields.io/github/release-pre/input-output-hk/cardano-node.svg?style=for-the-badge" /></a>
+    <a href="https://buildkite.com/input-output-hk/cardano-node"><img src="https://img.shields.io/buildkite/a978cbb4def7018be3d0a004127da356f4db32f1c318c1a48a/master?label=BUILD&style=for-the-badge"/></a>
+  </p>
+
+  <table align="center">
+    <tr><td colspan="2" align="center">Github Actions</td></tr>
+    <tr>
+      <td>
+        <a href="https://github.com/input-output-hk/cardano-node/actions/workflows/haskell.yml"><img alt="GitHub Workflow Status (master)" src="https://img.shields.io/github/workflow/status/input-output-hk/cardano-node/Haskell%20CI/master" /></a>
+        <a href="https://github.com/input-output-hk/cardano-node/actions/workflows/haskell.yml"><img alt="GitHub Workflow Status (branch)" src="https://img.shields.io/github/workflow/status/input-output-hk/cardano-node/Haskell%20CI/nightly?label=nightly" /></a>
+      </td>
+    </tr>
+  </table>
 
 *************************
 ``cardano-node`` Overview
@@ -32,7 +42,7 @@ The latest supported networks can be found at `<https://hydra.iohk.io/job/Cardan
 How to build
 ============
 
-Documentation for building the node can be found `here <https://docs.cardano.org/projects/cardano-node/en/latest/getting-started/install.html>`_.
+Documentation for building the node can be found `here <https://docs.cardano.org/getting-started/installing-the-cardano-node>`_.
 
 Linux Executable
 ==================
@@ -96,7 +106,7 @@ The general synopsis is as follows:
 
 * ``--byron-delegation-certificate`` - Optional path to the Byron delegation certificate. The delegation certificate allows the delegator (the issuer of said certificate) to give his/her own block signing rights to somebody else (the delegatee). The delegatee can then sign blocks on behalf of the delegator.
 
-* ``--byron-signing-key`` - Optional path to the Bryon signing key.
+* ``--byron-signing-key`` - Optional path to the Byron signing key.
 
 * ``--shelley-signing-key`` - Optional path to the Shelley signing key.
 
@@ -406,7 +416,19 @@ Byron vote submission:
 Development
 ===========
 
+GHCID
+-----
+
 run *ghcid* with: ``ghcid -c "cabal repl exe:cardano-node --reorder-goals"``
+
+Haskell Language Server
+-----------------------
+
+When using Haskell Langague Server with Visual Studio Code, you may find that
+`HLINT annotations are ignored<https://github.com/haskell/haskell-language-server/issues/638>`.
+
+To work around this, you may run the script `./scripts/reconfigure-hlint.sh` to generate a `.hlint.yaml`
+file with HLINT ignore rules derived from the source code.
 
 Testing
 ========

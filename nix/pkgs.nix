@@ -1,10 +1,10 @@
 # our packages overlay
 final: prev: with final;
   let
-    compiler = config.haskellNix.compiler or "ghc8104";
+    compiler-nix-name = config.haskellNix.compiler or "ghc8105";
   in {
   cardanoNodeProject = import ./haskell.nix {
-    inherit compiler
+    inherit compiler-nix-name
       pkgs
       lib
       stdenv
@@ -15,7 +15,7 @@ final: prev: with final;
   };
   cardanoNodeHaskellPackages = cardanoNodeProject.hsPkgs;
   cardanoNodeProfiledHaskellPackages = (import ./haskell.nix {
-    inherit compiler
+    inherit compiler-nix-name
       pkgs
       lib
       stdenv
@@ -28,7 +28,7 @@ final: prev: with final;
     profiling = true;
   }).hsPkgs;
   cardanoNodeEventlogHaskellPackages = (import ./haskell.nix {
-    inherit compiler
+    inherit compiler-nix-name
       pkgs
       lib
       stdenv
@@ -41,7 +41,7 @@ final: prev: with final;
     eventlog = true;
   }).hsPkgs;
   cardanoNodeAssertedHaskellPackages = (import ./haskell.nix {
-    inherit compiler
+    inherit compiler-nix-name
       pkgs
       lib
       stdenv
@@ -65,23 +65,32 @@ final: prev: with final;
   inherit (cardanoNodeHaskellPackages.cardano-node.components.exes) cardano-node;
   inherit (cardanoNodeHaskellPackages.cardano-cli.components.exes) cardano-cli;
   inherit (cardanoNodeHaskellPackages.cardano-topology.components.exes) cardano-topology;
+  inherit (cardanoNodeHaskellPackages.tx-generator.components.exes) tx-generator;
+  inherit (cardanoNodeHaskellPackages.locli.components.exes) locli;
   inherit (cardanoNodeHaskellPackages.bech32.components.exes) bech32;
   inherit (cardanoNodeHaskellPackages.cardano-submit-api.components.exes) cardano-submit-api;
   cardano-node-profiled = cardanoNodeProfiledHaskellPackages.cardano-node.components.exes.cardano-node;
   cardano-node-eventlogged = cardanoNodeEventlogHaskellPackages.cardano-node.components.exes.cardano-node;
   cardano-node-asserted = cardanoNodeAssertedHaskellPackages.cardano-node.components.exes.cardano-node;
+  tx-generator-profiled = cardanoNodeProfiledHaskellPackages.tx-generator.components.exes.tx-generator;
+  locli-profiled = cardanoNodeProfiledHaskellPackages.locli.components.exes.locli;
 
   # expose the db-converter and cardano-ping from the ouroboros-network we depend on
   inherit (cardanoNodeHaskellPackages.ouroboros-consensus-byron.components.exes) db-converter;
   inherit (cardanoNodeHaskellPackages.network-mux.components.exes) cardano-ping;
 
-  cabal = haskell-nix.tool compiler "cabal" {
+  cabal = haskell-nix.tool compiler-nix-name "cabal" {
     version = "latest";
     inherit (cardanoNodeProject) index-state;
   };
 
-  hlint = haskell-nix.tool compiler "hlint" {
+  hlint = haskell-nix.tool compiler-nix-name "hlint" {
     version = "3.2.7";
+    inherit (cardanoNodeProject) index-state;
+  };
+
+  haskellBuildUtils = prev.haskellBuildUtils.override {
+    inherit compiler-nix-name;
     inherit (cardanoNodeProject) index-state;
   };
 
@@ -96,7 +105,7 @@ final: prev: with final;
       dbPrefix = "db";
       socketPath = "/ipc/node.socket";
     };
-  in callPackage ./docker.nix {
+  in callPackage ./docker {
     exe = "cardano-node";
     scripts = import ./scripts.nix {
       inherit pkgs;
@@ -109,7 +118,7 @@ final: prev: with final;
     defaultConfig = {
       socketPath = "/ipc/node.socket";
     };
-  in callPackage ./docker.nix {
+  in callPackage ./docker {
     exe = "cardano-submit-api";
     scripts = import ./scripts-submit-api.nix {
       inherit pkgs;
@@ -124,4 +133,13 @@ final: prev: with final;
   };
 
   clusterTests = import ./supervisord-cluster/tests { inherit pkgs; };
+
+  # Disable failing python uvloop tests
+  python38 = prev.python38.override {
+    packageOverrides = pythonFinal: pythonPrev: {
+      uvloop = pythonPrev.uvloop.overrideAttrs (attrs: {
+        disabledTestPaths = [ "tests/test_tcp.py" "tests/test_sourcecode.py" "tests/test_dns.py" ];
+      });
+    };
+  };
 }

@@ -21,6 +21,7 @@ module Cardano.Api.Address (
     makeShelleyAddress,
     PaymentCredential(..),
     StakeAddressReference(..),
+    StakeAddressPointer(..),
 
     -- ** Addresses in any era
     AddressAny(..),
@@ -72,14 +73,6 @@ import qualified Data.Text.Encoding as Text
 
 import           Control.Applicative
 
-import qualified Cardano.Chain.Common as Byron
-
-import           Ouroboros.Consensus.Shelley.Protocol.Crypto (StandardCrypto)
-
-import qualified Shelley.Spec.Ledger.Address as Shelley
-import qualified Shelley.Spec.Ledger.BaseTypes as Shelley
-import qualified Shelley.Spec.Ledger.Credential as Shelley
-
 import           Cardano.Api.Eras
 import           Cardano.Api.Hash
 import           Cardano.Api.HasTypeProxy
@@ -90,7 +83,11 @@ import           Cardano.Api.NetworkId
 import           Cardano.Api.Script
 import           Cardano.Api.SerialiseBech32
 import           Cardano.Api.SerialiseRaw
-
+import qualified Cardano.Chain.Common as Byron
+import qualified Cardano.Ledger.Address as Shelley
+import qualified Cardano.Ledger.BaseTypes as Shelley
+import qualified Cardano.Ledger.Credential as Shelley
+import           Cardano.Ledger.Crypto (StandardCrypto)
 
 -- ----------------------------------------------------------------------------
 -- Address Serialisation
@@ -442,9 +439,10 @@ data StakeAddressReference
        | NoStakeAddress
   deriving (Eq, Show)
 
---TODO: wrap this type properly and export it
-type StakeAddressPointer = Shelley.Ptr
-
+newtype StakeAddressPointer = StakeAddressPointer
+  { unStakeAddressPointer :: Shelley.Ptr
+  }
+  deriving (Eq, Show)
 
 instance HasTypeProxy StakeAddress where
     data AsType StakeAddress = AsStakeAddress
@@ -523,7 +521,7 @@ toShelleyStakeReference :: StakeAddressReference
 toShelleyStakeReference (StakeAddressByValue stakecred) =
     Shelley.StakeRefBase (toShelleyStakeCredential stakecred)
 toShelleyStakeReference (StakeAddressByPointer ptr) =
-    Shelley.StakeRefPtr ptr
+    Shelley.StakeRefPtr (unStakeAddressPointer ptr)
 toShelleyStakeReference  NoStakeAddress =
     Shelley.StakeRefNull
 
@@ -560,6 +558,6 @@ fromShelleyStakeReference :: Shelley.StakeReference StandardCrypto
 fromShelleyStakeReference (Shelley.StakeRefBase stakecred) =
   StakeAddressByValue (fromShelleyStakeCredential stakecred)
 fromShelleyStakeReference (Shelley.StakeRefPtr ptr) =
-  StakeAddressByPointer ptr
+  StakeAddressByPointer (StakeAddressPointer ptr)
 fromShelleyStakeReference Shelley.StakeRefNull =
   NoStakeAddress

@@ -48,10 +48,11 @@ import           Prelude
 import           Data.Aeson (ToJSON, toJSON)
 import           Data.Type.Equality (TestEquality (..), (:~:) (Refl))
 
-import           Cardano.Ledger.Era as Ledger (Crypto)
-
-import           Ouroboros.Consensus.Shelley.Eras as Ledger (StandardAllegra, StandardAlonzo,
-                   StandardCrypto, StandardMary, StandardShelley)
+import           Ouroboros.Consensus.Shelley.Eras as Ledger
+                   (StandardShelley,
+                    StandardAllegra,
+                    StandardMary,
+                    StandardAlonzo)
 
 import           Cardano.Api.HasTypeProxy
 
@@ -68,9 +69,8 @@ data AllegraEra
 -- | A type used as a tag to distinguish the Mary era.
 data MaryEra
 
--- | A type used as a tag to distingush the Alonzo era.
+-- | A type used as a tag to distinguish the Alonzo era.
 data AlonzoEra
-
 
 instance HasTypeProxy ByronEra where
     data AsType ByronEra = AsByronEra
@@ -250,8 +250,7 @@ deriving instance Show (ShelleyBasedEra era)
 -- of Shelley-based eras, but also non-uniform by making case distinctions on
 -- the 'ShelleyBasedEra' constructors.
 --
-class (IsCardanoEra era, Ledger.Crypto (ShelleyLedgerEra era) ~ StandardCrypto)
-   => IsShelleyBasedEra era where
+class IsCardanoEra era => IsShelleyBasedEra era where
    shelleyBasedEra :: ShelleyBasedEra era
 
 instance IsShelleyBasedEra ShelleyEra where
@@ -277,6 +276,7 @@ data InAnyShelleyBasedEra thing where
                           -> InAnyShelleyBasedEra thing
 
 
+-- | Converts a 'ShelleyBasedEra' to the broader 'CardanoEra'.
 shelleyBasedToCardanoEra :: ShelleyBasedEra era -> CardanoEra era
 shelleyBasedToCardanoEra ShelleyBasedEraShelley = ShelleyEra
 shelleyBasedToCardanoEra ShelleyBasedEraAllegra = AllegraEra

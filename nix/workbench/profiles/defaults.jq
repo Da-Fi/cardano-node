@@ -26,7 +26,7 @@ def era_defaults($era):
     ## UTxO & delegation
     , total_balance:                  900000000000000
     , pools_balance:                  800000000000000
-    , utxo:                           1000000
+    , utxo:                           0
     , decentralisation_param:         0
 
     ## Blockchain time & block density
@@ -47,8 +47,8 @@ def era_defaults($era):
         , rho: 0.0022
         , tau: 0.05
         , a0: 0.3
-        , minFeeA: 44
-        , minFeeB: 155381
+        , minFeeA: 0
+        , minFeeB: 0
         , decentralisationParam: 0
         }
       }
@@ -89,6 +89,10 @@ def era_defaults($era):
   }
 
 , mary:
+  {
+  }
+
+, alonzo:
   {
   }
 } | (.common * .[$era]);

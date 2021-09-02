@@ -86,6 +86,8 @@ module Cardano.Api.Shelley
     -- | Embedding additional structured data within transactions.
     toShelleyMetadata,
     fromShelleyMetadata,
+    toShelleyMetadatum,
+    fromShelleyMetadatum,
 
     -- * Protocol parameters
     ProtocolParameters(..),
@@ -99,6 +101,16 @@ module Cardano.Api.Shelley
     toShelleyScriptHash,
     fromShelleyScriptHash,
     PlutusScript(..),
+    toPlutusData,
+    fromPlutusData,
+    toAlonzoData,
+    fromAlonzoData,
+    toAlonzoPrices,
+    fromAlonzoPrices,
+    toAlonzoExUnits,
+    fromAlonzoExUnits,
+    toAlonzoRdmrPtr,
+    fromAlonzoRdmrPtr,
 
     -- * Certificates
     Certificate (..),
@@ -160,7 +172,6 @@ module Cardano.Api.Shelley
 
 
     -- ** Local State Query
-    QueryInShelleyBasedEra(..),
     DebugLedgerState(..),
     ProtocolState(..),
     SerialisedDebugLedgerState(..),

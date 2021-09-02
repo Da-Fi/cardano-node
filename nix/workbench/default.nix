@@ -10,6 +10,7 @@
 , customConfig
 , cardano-cli
 , cardano-topology
+, locli
 
 , useCabalRun
 }:
@@ -56,6 +57,7 @@ let
 
       cardano-cli
       cardano-topology
+      locli
     ];
 
   runWorkbench =
@@ -67,7 +69,7 @@ let
   runWorkbenchJqOnly =
     name: command:
     runCommand name {} ''
-      ${workbench' [jq]}/bin/wb ${command} > $out
+      ${workbench' [jq moreutils]}/bin/wb ${command} > $out
     '';
 
   runJq =
@@ -86,7 +88,7 @@ let
     else "nix-exes+checkout-wb";
 
   shellHook = ''
-    export WORKBENCH_BACKEND=${./.}/supervisor.sh
+    export WORKBENCH_BACKEND=supervisor
 
       ${optionalString workbenchDevMode
     ''
@@ -120,18 +122,27 @@ let
       ${exeCabalOp "run" "cardano-topology"} "$@"
     }
 
-    export -f cardano-cli cardano-node cardano-topology
+    function locli() {
+      ${exeCabalOp "run" "locli"} "$@"
+    }
+
+    function tx-generator() {
+      ${exeCabalOp "run" "tx-generator"} "$@"
+    }
+
+    export -f cardano-cli cardano-node cardano-topology locli tx-generator
 
     ''}
 
     function workbench-prebuild-executables() {
       ${optionalString useCabalRun
         ''
-      git log -n1 --alternate-refs --pretty=format:"%Cblue%h %Cred%cr %Cgreen%D %Cblue%s%Creset"
-      echo -n "workbench:  prebuilding executables (because of useCabalRun):"
-      for exe in cardano-cli cardano-node cardano-topology
-      do echo -n " $exe"
-         ${exeCabalOp "run" "$exe"} --help >/dev/null || return 1
+      git log -n1 --alternate-refs --pretty=format:"%Cred%cr %Cblue%h %Cgreen%D %Cblue%s%Creset" --color | sed "s/^/$(git diff --exit-code --quiet && echo ' ' || echo '[31mlocal changes + ')/"
+      echo
+      echo -n "workbench:  prebuilding executables (because of useCabalRun): "
+      for exe in tx-generator cardano-cli cardano-node cardano-topology locli
+      do echo -n "$exe "
+         ${exeCabalOp "build" "$exe"} 2>&1 >/dev/null | { grep -v 'Temporary modify'; true; } || return 1
       done
       echo
         ''}
@@ -139,6 +150,7 @@ let
     }
     export -f workbench-prebuild-executables
 
+    export CARDANO_NODE_SOCKET_PATH=run/current/node-0/node.socket
     '';
 
   generateProfiles =
@@ -164,7 +176,7 @@ let
         with envArgs; rec {
           inherit cardanoLib stateDir;
 
-          JSON = runWorkbench "environment.json"
+          JSON = runWorkbenchJqOnly "environment.json"
           ''env compute-config \
             --cache-dir "${cacheDir}" \
             --base-port ${toString basePort} \
@@ -187,7 +199,7 @@ let
       profiles = genAttrs profile-names mkProfile;
 
       profilesJSON =
-        runWorkbench "all-profiles.json" "profiles generate-all";
+        runWorkbenchJqOnly "all-profiles.json" "profiles generate-all";
     };
 
   initialiseProfileRunDirShellScript =
@@ -201,7 +213,17 @@ let
           cp -f ${svc.topology.JSON}      ${runDir}/${name}/topology.json
           cp -f ${svc.startupScript}      ${runDir}/${name}/start.sh
           ''
-        ));
+        )
+      ++
+      [ (let svc = profile.generator-service;
+         in
+          ''
+          cp -f ${svc.runScript.JSON}     ${runDir}/generator/run-script.json
+          cp -f ${svc.serviceConfig.JSON} ${runDir}/generator/service-config.json
+          cp -f ${svc.nodeConfig.JSON}    ${runDir}/generator/config.json
+          cp -f ${svc.startupScript}      ${runDir}/generator/start.sh
+          '')
+      ]);
 in
 {
   inherit workbench runWorkbench runJq;

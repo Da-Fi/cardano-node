@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
@@ -11,6 +12,7 @@ module Cardano.Api.Script (
     -- * Languages
     SimpleScriptV1,
     SimpleScriptV2,
+    PlutusScriptV1,
     ScriptLanguage(..),
     SimpleScriptVersion(..),
     PlutusScriptVersion(..),
@@ -33,12 +35,14 @@ module Cardano.Api.Script (
 
     -- * Use of a script in an era as a witness
     WitCtxTxIn, WitCtxMint, WitCtxStake,
+    WitCtx(..),
     ScriptWitness(..),
     Witness(..),
     KeyWitnessInCtx(..),
     ScriptWitnessInCtx(..),
     ScriptDatum(..),
     ScriptRedeemer,
+    scriptWitnessScript,
 
     -- ** Languages supported in each era
     ScriptLanguageInEra(..),
@@ -54,6 +58,8 @@ module Cardano.Api.Script (
 
     -- * The Plutus script language
     PlutusScript(..),
+    examplePlutusScriptAlwaysSucceeds,
+    examplePlutusScriptAlwaysFails,
 
     -- * Script data
     ScriptData(..),
@@ -76,8 +82,10 @@ module Cardano.Api.Script (
     fromAlonzoExUnits,
     toShelleyScriptHash,
     fromShelleyScriptHash,
-    toAlonzoScriptData,
-    fromAlonzoScriptData,
+    toPlutusData,
+    fromPlutusData,
+    toAlonzoData,
+    fromAlonzoData,
     toAlonzoLanguage,
     fromAlonzoLanguage,
 
@@ -100,6 +108,7 @@ import qualified Data.Text as Text
 import qualified Data.Text.Encoding as Text
 import           Data.Type.Equality (TestEquality (..), (:~:) (Refl))
 import           Data.Typeable (Typeable)
+import           Numeric.Natural (Natural)
 
 import           Data.Aeson (Value (..), object, (.:), (.=))
 import qualified Data.Aeson as Aeson
@@ -120,25 +129,27 @@ import           Cardano.Slotting.Slot (SlotNo)
 
 import qualified Cardano.Ledger.Core as Ledger
 import qualified Cardano.Ledger.Era  as Ledger
-import qualified Cardano.Ledger.SafeHash as Ledger
 
 import qualified Cardano.Ledger.ShelleyMA.Timelocks as Timelock
 import           Ouroboros.Consensus.Shelley.Eras (StandardCrypto)
-import qualified Shelley.Spec.Ledger.Keys as Shelley
+import qualified Cardano.Ledger.Keys as Shelley
 import qualified Shelley.Spec.Ledger.Scripts as Shelley
 
-import qualified Cardano.Ledger.Alonzo.Data as Alonzo
 import qualified Cardano.Ledger.Alonzo.Language as Alonzo
 import qualified Cardano.Ledger.Alonzo.Scripts as Alonzo
+
+import qualified Plutus.V1.Ledger.Examples as Plutus
 
 import           Cardano.Api.Eras
 import           Cardano.Api.HasTypeProxy
 import           Cardano.Api.Hash
 import           Cardano.Api.KeysShelley
+import           Cardano.Api.ScriptData
 import           Cardano.Api.SerialiseCBOR
 import           Cardano.Api.SerialiseJSON
 import           Cardano.Api.SerialiseRaw
 import           Cardano.Api.SerialiseTextEnvelope
+import           Cardano.Api.SerialiseUsing
 
 {- HLINT ignore "Use section" -}
 
@@ -279,6 +290,17 @@ instance Enum AnyPlutusScriptVersion where
 instance Bounded AnyPlutusScriptVersion where
     minBound = AnyPlutusScriptVersion PlutusScriptV1
     maxBound = AnyPlutusScriptVersion PlutusScriptV1
+
+instance ToCBOR AnyPlutusScriptVersion where
+    toCBOR = toCBOR . fromEnum
+
+instance FromCBOR AnyPlutusScriptVersion where
+    fromCBOR = do
+      n <- fromCBOR
+      if n >= fromEnum (minBound :: AnyPlutusScriptVersion) &&
+         n <= fromEnum (maxBound :: AnyPlutusScriptVersion)
+        then return $! toEnum n
+        else fail "plutus script version out of bounds"
 
 instance ToJSON AnyPlutusScriptVersion where
     toJSON (AnyPlutusScriptVersion PlutusScriptV1) =
@@ -517,6 +539,9 @@ scriptLanguageSupportedInEra era lang =
       (MaryEra, SimpleScriptLanguage SimpleScriptV2) ->
         Just SimpleScriptV2InMary
 
+      (AlonzoEra, SimpleScriptLanguage SimpleScriptV1) ->
+        Just SimpleScriptV1InAlonzo
+
       (AlonzoEra, SimpleScriptLanguage SimpleScriptV2) ->
         Just SimpleScriptV2InAlonzo
 
@@ -593,6 +618,17 @@ data WitCtxMint
 --
 data WitCtxStake
 
+
+-- | This GADT provides a value-level representation of all the witness
+-- contexts. This enables pattern matching on the context to allow them to be
+-- treated in a non-uniform way.
+--
+data WitCtx witctx where
+     WitCtxTxIn  :: WitCtx WitCtxTxIn
+     WitCtxMint  :: WitCtx WitCtxMint
+     WitCtxStake :: WitCtx WitCtxStake
+
+
 -- | A /use/ of a script within a transaction body to witness that something is
 -- being used in an authorised manner. That can be
 --
@@ -647,6 +683,8 @@ instance Eq (ScriptWitness witctx era) where
 
     (==)  _ _ = False
 
+type ScriptRedeemer = ScriptData
+
 data ScriptDatum witctx where
      ScriptDatumForTxIn    :: ScriptData -> ScriptDatum WitCtxTxIn
      NoScriptDatumForMint  ::               ScriptDatum WitCtxMint
@@ -654,6 +692,14 @@ data ScriptDatum witctx where
 
 deriving instance Eq   (ScriptDatum witctx)
 deriving instance Show (ScriptDatum witctx)
+
+
+scriptWitnessScript :: ScriptWitness witctx era -> ScriptInEra era
+scriptWitnessScript (SimpleScriptWitness langInEra version script) =
+    ScriptInEra langInEra (SimpleScript version script)
+
+scriptWitnessScript (PlutusScriptWitness langInEra version script _ _ _) =
+    ScriptInEra langInEra (PlutusScript version script)
 
 
 -- ----------------------------------------------------------------------------
@@ -691,46 +737,6 @@ deriving instance Show (ScriptWitnessInCtx witctx)
 
 
 -- ----------------------------------------------------------------------------
--- Script data
---
-
-type ScriptRedeemer = ScriptData
-
--- TODO alonzo: Placeholder type to re-present the Alonzo.Data type
-data ScriptData = ScriptData
-  deriving (Eq, Show)
-
-instance HasTypeProxy ScriptData where
-    data AsType ScriptData = AsScriptData
-    proxyToAsType _ = AsScriptData
-
-toAlonzoScriptData :: ScriptData -> Alonzo.Data ledgerera
-toAlonzoScriptData = error "TODO alonzo: toShelleyScriptData"
-
-fromAlonzoScriptData :: Alonzo.Data ledgerera -> ScriptData
-fromAlonzoScriptData = error "TODO alonzo: fromShelleyScriptData"
-
-
-newtype instance Hash ScriptData =
-    ScriptDataHash (Alonzo.DataHash StandardCrypto)
-  deriving stock (Eq, Ord)
-  deriving (Show, IsString) via UsingRawBytesHex (Hash ScriptData)
-
-instance SerialiseAsRawBytes (Hash ScriptData) where
-    serialiseToRawBytes (ScriptDataHash dh) =
-      Crypto.hashToBytes (Ledger.extractHash dh)
-
-    deserialiseFromRawBytes (AsHash AsScriptData) bs =
-      ScriptDataHash . Ledger.unsafeMakeSafeHash <$> Crypto.hashFromBytes bs
-
-instance ToJSON (Hash ScriptData) where
-    toJSON = toJSON . serialiseToRawBytesHexText
-
-instance Aeson.ToJSONKey (Hash ScriptData) where
-    toJSONKey = Aeson.toJSONKeyText serialiseToRawBytesHexText
-
-
--- ----------------------------------------------------------------------------
 -- Script execution units
 --
 
@@ -750,6 +756,19 @@ data ExecutionUnits =
         executionMemory :: Word64
      }
   deriving (Eq, Show)
+
+instance ToCBOR ExecutionUnits where
+  toCBOR ExecutionUnits{executionSteps, executionMemory} =
+      CBOR.encodeListLen 2
+   <> toCBOR executionSteps
+   <> toCBOR executionMemory
+
+instance FromCBOR ExecutionUnits where
+  fromCBOR = do
+    CBOR.enforceSize "ExecutionUnits" 2
+    ExecutionUnits
+      <$> fromCBOR
+      <*> fromCBOR
 
 instance ToJSON ExecutionUnits where
   toJSON ExecutionUnits{executionSteps, executionMemory} =
@@ -789,7 +808,8 @@ fromAlonzoExUnits Alonzo.ExUnits{Alonzo.exUnitsSteps, Alonzo.exUnitsMem} =
 --
 newtype ScriptHash = ScriptHash (Shelley.ScriptHash StandardCrypto)
   deriving stock (Eq, Ord)
-  deriving (Show, IsString) via UsingRawBytesHex ScriptHash
+  deriving (Show, IsString)   via UsingRawBytesHex ScriptHash
+  deriving (ToJSON, FromJSON) via UsingRawBytesHex ScriptHash
 
 instance HasTypeProxy ScriptHash where
     data AsType ScriptHash = AsScriptHash
@@ -920,9 +940,12 @@ adjustSimpleScriptVersion target = go
 --
 data PlutusScript lang where
      PlutusScriptSerialised :: ShortByteString -> PlutusScript lang
-
-deriving instance Eq (PlutusScript lang)
-deriving instance Show (PlutusScript lang)
+  deriving stock (Eq, Ord)
+  deriving stock (Show) -- TODO: would be nice to use via UsingRawBytesHex
+                        -- however that adds an awkward HasTypeProxy lang =>
+                        -- constraint to other Show instances elsewhere
+  deriving (ToCBOR, FromCBOR) via (UsingRawBytes (PlutusScript lang))
+  deriving anyclass SerialiseAsCBOR
 
 instance HasTypeProxy lang => HasTypeProxy (PlutusScript lang) where
     data AsType (PlutusScript lang) = AsPlutusScript (AsType lang)
@@ -935,21 +958,54 @@ instance HasTypeProxy lang => SerialiseAsRawBytes (PlutusScript lang) where
       -- TODO alonzo: validate the script syntax and fail decoding if invalid
       Just (PlutusScriptSerialised (SBS.toShort bs))
 
-instance Typeable lang => ToCBOR (PlutusScript lang) where
-    toCBOR (PlutusScriptSerialised sbs) = toCBOR sbs
-
-instance Typeable lang => FromCBOR (PlutusScript lang) where
-    -- TODO alonzo: validate the script syntax and fail decoding if invalid
-    fromCBOR = PlutusScriptSerialised <$> fromCBOR
-
-instance (HasTypeProxy lang, Typeable lang) =>
-         SerialiseAsCBOR (PlutusScript lang)
-
 instance (IsPlutusScriptLanguage lang, Typeable lang) =>
          HasTextEnvelope (PlutusScript lang) where
     textEnvelopeType _ =
       case plutusScriptVersion :: PlutusScriptVersion lang of
         PlutusScriptV1 -> "PlutusScriptV1"
+
+
+-- | An example Plutus script that always succeeds, irrespective of inputs.
+--
+-- For example, if one were to use this for a payment address then it would
+-- allow anyone to spend from it.
+--
+-- The exact script depends on the context in which it is to be used.
+--
+examplePlutusScriptAlwaysSucceeds :: WitCtx witctx
+                                  -> PlutusScript PlutusScriptV1
+examplePlutusScriptAlwaysSucceeds =
+    PlutusScriptSerialised
+  . Plutus.alwaysSucceedingNAryFunction
+  . scriptArityForWitCtx
+
+-- | An example Plutus script that always fails, irrespective of inputs.
+--
+-- For example, if one were to use this for a payment address then it would
+-- be impossible for anyone to ever spend from it.
+--
+-- The exact script depends on the context in which it is to be used.
+--
+examplePlutusScriptAlwaysFails :: WitCtx witctx
+                               -> PlutusScript PlutusScriptV1
+examplePlutusScriptAlwaysFails =
+    PlutusScriptSerialised
+  . Plutus.alwaysFailingNAryFunction
+  . scriptArityForWitCtx
+
+-- | The expected arity of the Plutus function, depending on the context in
+-- which it is used.
+--
+-- The script inputs consist of
+--
+-- * the optional datum (for txins)
+-- * the redeemer
+-- * the Plutus representation of the tx and environment
+--
+scriptArityForWitCtx :: WitCtx witctx -> Natural
+scriptArityForWitCtx WitCtxTxIn  = 3
+scriptArityForWitCtx WitCtxMint  = 2
+scriptArityForWitCtx WitCtxStake = 2
 
 
 -- ----------------------------------------------------------------------------

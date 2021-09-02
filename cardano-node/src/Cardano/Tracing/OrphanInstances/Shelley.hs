@@ -29,6 +29,7 @@ import qualified Data.Text as Text
 import qualified Cardano.Api as Api
 import           Cardano.Api.Orphans ()
 import qualified Cardano.Api.Shelley as Api
+import           Cardano.Ledger.Crypto (StandardCrypto)
 
 import           Cardano.Slotting.Block (BlockNo (..))
 import           Cardano.Tracing.OrphanInstances.Common
@@ -43,25 +44,25 @@ import           Ouroboros.Network.Point (WithOrigin, withOriginToMaybe)
 import           Ouroboros.Consensus.Shelley.Ledger hiding (TxId)
 import           Ouroboros.Consensus.Shelley.Ledger.Inspect
 import           Ouroboros.Consensus.Shelley.Protocol (TPraosCannotForge (..))
-import           Ouroboros.Consensus.Shelley.Protocol.Crypto (StandardCrypto)
 import qualified Ouroboros.Consensus.Shelley.Protocol.HotKey as HotKey
 
 import qualified Cardano.Crypto.Hash.Class as Crypto
 import           Cardano.Ledger.Alonzo as Alonzo
+import qualified Cardano.Ledger.Alonzo.PlutusScriptApi as Alonzo
 import           Cardano.Ledger.Alonzo.Rules.Bbody (AlonzoBbodyPredFail)
 import qualified Cardano.Ledger.Alonzo.Rules.Utxo as Alonzo
+import qualified Cardano.Ledger.Alonzo.Rules.Utxos as Alonzo
 import           Cardano.Ledger.Alonzo.Rules.Utxow (AlonzoPredFail (..))
 import qualified Cardano.Ledger.Alonzo.Tx as Alonzo
-import qualified Cardano.Ledger.Alonzo.TxBody as Alonzo
 import qualified Cardano.Ledger.AuxiliaryData as Core
+import           Cardano.Ledger.BaseTypes (strictMaybeToMaybe)
 import qualified Cardano.Ledger.Core as Core
 import qualified Cardano.Ledger.Core as Ledger
 import qualified Cardano.Ledger.Crypto as Core
-import qualified Cardano.Ledger.Era as Ledger
 import qualified Cardano.Ledger.SafeHash as SafeHash
 import qualified Cardano.Ledger.ShelleyMA.Rules.Utxo as MA
 import qualified Cardano.Ledger.ShelleyMA.Timelocks as MA
-import           Shelley.Spec.Ledger.BaseTypes (strictMaybeToMaybe)
+
 
 -- TODO: this should be exposed via Cardano.Api
 import           Shelley.Spec.Ledger.API hiding (ShelleyBasedEra)
@@ -297,48 +298,63 @@ instance ( ShelleyBasedEra era
 instance ToObject (AlonzoPredFail (Alonzo.AlonzoEra StandardCrypto)) where
   toObject v (WrappedShelleyEraFailure utxoPredFail) =
     toObject v utxoPredFail
-  toObject _ (UnRedeemableScripts scripts) =
-    mkObject [ "kind" .= String "UnRedeemableScripts"
-             , "scripts" .= renderUnredeemableScripts scripts
+  toObject _ (MissingRedeemers scripts) =
+    mkObject [ "kind" .= String "MissingRedeemers"
+             , "scripts" .= renderMissingRedeemers scripts
              ]
-  toObject _ (DataHashSetsDontAgree fromTx fromUtxo) =
-    mkObject [ "kind" .= String "DataHashSetsDontAgree"
-             , "fromTx" .= map (Crypto.hashToTextAsHex . SafeHash.extractHash) (Set.toList fromTx)
-             , "fromUtxo" .= map (Crypto.hashToTextAsHex . SafeHash.extractHash) (Set.toList fromUtxo)
+  toObject _ (MissingRequiredDatums required received) =
+    mkObject [ "kind" .= String "MissingRequiredDatums"
+             , "required" .= map (Crypto.hashToTextAsHex . SafeHash.extractHash)
+                                 (Set.toList required)
+             , "received" .= map (Crypto.hashToTextAsHex . SafeHash.extractHash)
+                                 (Set.toList received)
              ]
   toObject _ (PPViewHashesDontMatch ppHashInTxBody ppHashFromPParams) =
     mkObject [ "kind" .= String "PPViewHashesDontMatch"
-             , "fromTxBody" .= renderWitnessPPDataHash (strictMaybeToMaybe ppHashInTxBody)
-             , "fromPParams" .= renderWitnessPPDataHash (strictMaybeToMaybe ppHashFromPParams)
+             , "fromTxBody" .= renderScriptIntegrityHash (strictMaybeToMaybe ppHashInTxBody)
+             , "fromPParams" .= renderScriptIntegrityHash (strictMaybeToMaybe ppHashFromPParams)
              ]
   toObject _ (MissingRequiredSigners missingKeyWitnesses) =
     mkObject [ "kind" .= String "MissingRequiredSigners"
              , "witnesses" .= Set.toList missingKeyWitnesses
              ]
+  toObject _ (UnspendableUTxONoDatumHash txins) =
+    mkObject [ "kind" .= String "MissingRequiredSigners"
+             , "txins" .= Set.toList txins
+             ]
+  toObject _ (NonOutputSupplimentaryDatums disallowed acceptable) =
+    mkObject [ "kind" .= String "NonOutputSupplimentaryDatums"
+             , "disallowed" .= Set.toList disallowed
+             , "acceptable" .= Set.toList acceptable
+             ]
+  toObject _ (ExtraRedeemers rdmrs) =
+    mkObject [ "kind" .= String "ExtraRedeemers"
+             , "rdmrs" .= map (Api.renderScriptWitnessIndex . Api.fromAlonzoRdmrPtr) rdmrs
+             ]
 
-renderWitnessPPDataHash :: Maybe (Alonzo.WitnessPPDataHash StandardCrypto) -> Aeson.Value
-renderWitnessPPDataHash (Just witPPDataHash) =
+renderScriptIntegrityHash :: Maybe (Alonzo.ScriptIntegrityHash StandardCrypto) -> Aeson.Value
+renderScriptIntegrityHash (Just witPPDataHash) =
   Aeson.String . Crypto.hashToTextAsHex $ SafeHash.extractHash witPPDataHash
-renderWitnessPPDataHash Nothing = Aeson.Null
+renderScriptIntegrityHash Nothing = Aeson.Null
 
 renderScriptHash :: ScriptHash StandardCrypto -> Text
 renderScriptHash = Api.serialiseToRawBytesHexText . Api.fromShelleyScriptHash
 
-renderUnredeemableScripts :: [(Alonzo.ScriptPurpose StandardCrypto, ScriptHash StandardCrypto)] -> Aeson.Value
-renderUnredeemableScripts scripts = Aeson.object $ map renderTuple  scripts
+renderMissingRedeemers :: [(Alonzo.ScriptPurpose StandardCrypto, ScriptHash StandardCrypto)] -> Aeson.Value
+renderMissingRedeemers scripts = Aeson.object $ map renderTuple  scripts
  where
   renderTuple :: (Alonzo.ScriptPurpose StandardCrypto, ScriptHash StandardCrypto) -> Aeson.Pair
   renderTuple (scriptPurpose, sHash) =  renderScriptHash sHash .= renderScriptPurpose scriptPurpose
 
-  renderScriptPurpose :: Alonzo.ScriptPurpose StandardCrypto -> Aeson.Value
-  renderScriptPurpose (Alonzo.Minting pid) =
-    Aeson.object [ "minting" .= toJSON pid]
-  renderScriptPurpose (Alonzo.Spending txin) =
-    Aeson.object [ "spending" .= Api.fromShelleyTxIn txin]
-  renderScriptPurpose (Alonzo.Rewarding rwdAcct) =
-    Aeson.object [ "rewarding" .= Aeson.String (Api.serialiseAddress $ Api.fromShelleyStakeAddr rwdAcct)]
-  renderScriptPurpose (Alonzo.Certifying cert) =
-    Aeson.object [ "certifying" .= toJSON (Api.textEnvelopeDefaultDescr $ Api.fromShelleyCertificate cert)]
+renderScriptPurpose :: Alonzo.ScriptPurpose StandardCrypto -> Aeson.Value
+renderScriptPurpose (Alonzo.Minting pid) =
+  Aeson.object [ "minting" .= toJSON pid]
+renderScriptPurpose (Alonzo.Spending txin) =
+  Aeson.object [ "spending" .= Api.fromShelleyTxIn txin]
+renderScriptPurpose (Alonzo.Rewarding rwdAcct) =
+  Aeson.object [ "rewarding" .= Aeson.String (Api.serialiseAddress $ Api.fromShelleyStakeAddr rwdAcct)]
+renderScriptPurpose (Alonzo.Certifying cert) =
+  Aeson.object [ "certifying" .= toJSON (Api.textEnvelopeDefaultDescr $ Api.fromShelleyCertificate cert)]
 
 instance ( ShelleyBasedEra era
          , ToObject (PredicateFailure (UTXO era))
@@ -644,6 +660,12 @@ instance ToObject (PoolPredicateFailure era) where
              , "protocolParCost" .= String (textShow protCost)
              , "error" .= String "The stake pool cost is too low"
              ]
+  toObject _verb (PoolMedataHashTooBig poolID hashSize) =
+    mkObject [ "kind" .= String "PoolMedataHashTooBig"
+             , "poolID" .= String (textShow poolID)
+             , "hashSize" .= String (textShow hashSize)
+             , "error" .= String "The stake pool metadata hash is too large"
+             ]
 
 -- Apparently this should never happen according to the Shelley exec spec
   toObject _verb (WrongCertificateTypePOOL index) =
@@ -821,6 +843,7 @@ instance ToObject (OcertPredicateFailure crypto) where
              ]
 
 
+
 instance ToObject (UpdnPredicateFailure crypto) where
   toObject _verb x = case x of {} -- no constructors
 
@@ -838,23 +861,140 @@ instance ToObject (UpecPredicateFailure era) where
 
 
 instance ToObject (Alonzo.UtxoPredicateFailure (Alonzo.AlonzoEra StandardCrypto)) where
-  toObject _ _ = panic "ToJSON: UtxoPredicateFailure not implemented yet"
+  toObject _verb (Alonzo.BadInputsUTxO badInputs) =
+    mkObject [ "kind" .= String "BadInputsUTxO"
+             , "badInputs" .= badInputs
+             , "error" .= renderBadInputsUTxOErr badInputs
+             ]
+  toObject _verb (Alonzo.OutsideValidityIntervalUTxO validtyInterval slot) =
+    mkObject [ "kind" .= String "ExpiredUTxO"
+             , "validityInterval" .= validtyInterval
+             , "slot" .= slot
+             ]
+  toObject _verb (Alonzo.MaxTxSizeUTxO txsize maxtxsize) =
+    mkObject [ "kind" .= String "MaxTxSizeUTxO"
+             , "size" .= txsize
+             , "maxSize" .= maxtxsize
+             ]
+  toObject _verb Alonzo.InputSetEmptyUTxO =
+    mkObject [ "kind" .= String "InputSetEmptyUTxO" ]
+  toObject _verb (Alonzo.FeeTooSmallUTxO minfee currentFee) =
+    mkObject [ "kind" .= String "FeeTooSmallUTxO"
+             , "minimum" .= minfee
+             , "fee" .= currentFee
+             ]
+  toObject _verb (Alonzo.ValueNotConservedUTxO consumed produced) =
+    mkObject [ "kind" .= String "ValueNotConservedUTxO"
+             , "consumed" .= consumed
+             , "produced" .= produced
+             , "error" .= renderValueNotConservedErr consumed produced
+             ]
+  toObject _verb (Alonzo.WrongNetwork network addrs) =
+    mkObject [ "kind" .= String "WrongNetwork"
+             , "network" .= network
+             , "addrs"   .= addrs
+             ]
+  toObject _verb (Alonzo.WrongNetworkWithdrawal network addrs) =
+    mkObject [ "kind" .= String "WrongNetworkWithdrawal"
+             , "network" .= network
+             , "addrs"   .= addrs
+             ]
+  toObject _verb (Alonzo.OutputTooSmallUTxO badOutputs) =
+    mkObject [ "kind" .= String "OutputTooSmallUTxO"
+             , "outputs" .= badOutputs
+             , "error" .= String "The output is smaller than the allow minimum \
+                                 \UTxO value defined in the protocol parameters"
+             ]
+  toObject verb (Alonzo.UtxosFailure predFailure) =
+    toObject verb predFailure
+  toObject _verb (Alonzo.OutputBootAddrAttrsTooBig txouts) =
+    mkObject [ "kind" .= String "OutputBootAddrAttrsTooBig"
+             , "outputs" .= txouts
+             , "error" .= String "The Byron address attributes are too big"
+             ]
+  toObject _verb Alonzo.TriesToForgeADA =
+    mkObject [ "kind" .= String "TriesToForgeADA" ]
+  toObject _verb (Alonzo.OutputTooBigUTxO badOutputs) =
+    mkObject [ "kind" .= String "OutputTooBigUTxO"
+             , "outputs" .= badOutputs
+             , "error" .= String "Too many asset ids in the tx output"
+             ]
+  toObject _verb (Alonzo.InsufficientCollateral computedBalance suppliedFee) =
+    mkObject [ "kind" .= String "InsufficientCollateral"
+             , "balance" .= computedBalance
+             , "txfee" .= suppliedFee
+             ]
+  toObject _verb (Alonzo.ScriptsNotPaidUTxO utxos) =
+    mkObject [ "kind" .= String "ScriptsNotPaidUTxO"
+             , "utxos" .= utxos
+             ]
+  toObject _verb (Alonzo.ExUnitsTooBigUTxO pParamsMaxExUnits suppliedExUnits) =
+    mkObject [ "kind" .= String "ExUnitsTooBigUTxO"
+             , "maxexunits" .= pParamsMaxExUnits
+             , "exunits" .= suppliedExUnits
+             ]
+  toObject _verb (Alonzo.CollateralContainsNonADA inputs) =
+    mkObject [ "kind" .= String "CollateralContainsNonADA"
+             , "inputs" .= inputs
+             ]
+  toObject _verb (Alonzo.WrongNetworkInTxBody actualNetworkId netIdInTxBody) =
+    mkObject [ "kind" .= String "WrongNetworkInTxBody"
+             , "networkid" .= actualNetworkId
+             , "txbodyNetworkId" .= netIdInTxBody
+             ]
+  toObject _verb (Alonzo.OutsideForecast slotNum) =
+    mkObject [ "kind" .= String "OutsideForecast"
+             , "slot" .= slotNum
+             ]
+  toObject _verb (Alonzo.TooManyCollateralInputs maxCollateralInputs numberCollateralInputs) =
+    mkObject [ "kind" .= String "TooManyCollateralInputs"
+             , "max" .= maxCollateralInputs
+             , "inputs" .= numberCollateralInputs
+             ]
+  toObject _verb Alonzo.NoCollateralInputs =
+    mkObject [ "kind" .= String "NoCollateralInputs" ]
+
+instance ToObject (Alonzo.UtxosPredicateFailure (AlonzoEra StandardCrypto)) where
+  toObject _ (Alonzo.ValidationTagMismatch isValidating reason) =
+    mkObject [ "kind" .= String "ValidationTagMismatch"
+             , "isvalidating" .= isValidating
+             , "reason" .= reason
+             ]
+  toObject _ (Alonzo.CollectErrors errors) =
+    mkObject [ "kind" .= String "CollectErrors"
+             , "errors" .= errors
+             ]
+  toObject verb (Alonzo.UpdateFailure pFailure) =
+    toObject verb pFailure
+
+deriving newtype instance ToJSON Alonzo.IsValid
+
+instance ToJSON (Alonzo.CollectError StandardCrypto) where
+  toJSON cError =
+    case cError of
+      Alonzo.NoRedeemer sPurpose ->
+        object
+          [ "kind" .= String "CollectError"
+          , "error" .= String "NoRedeemer"
+          , "scriptpurpose" .= renderScriptPurpose sPurpose
+          ]
+      Alonzo.NoWitness sHash ->
+        object
+          [ "kind" .= String "CollectError"
+          , "error" .= String "NoWitness"
+          , "scripthash" .= toJSON sHash
+          ]
+      Alonzo.NoCostModel lang ->
+        object
+          [ "kind" .= String "CollectError"
+          , "error" .= String "NoCostModel"
+          , "language" .= toJSON lang
+          ]
 
 instance ToObject (AlonzoBbodyPredFail (Alonzo.AlonzoEra StandardCrypto)) where
-  toObject _ _ = panic "ToJSON: AlonzoBbodyPredFail not implemented yet"
-
-instance (Ledger.Era era, Show (Ledger.Value era), ToJSON (Ledger.Value era))
-    => ToJSON (Alonzo.TxOut era) where
-  toJSON (Alonzo.TxOut addr v dataHash) =
-    object [ "address" .= toJSON addr
-           , "value" .= toJSON v
-           , "datahash" .= case strictMaybeToMaybe dataHash of
-                             Nothing -> Aeson.Null
-                             Just dHash ->
-                               Aeson.String . Crypto.hashToTextAsHex
-                                 $ SafeHash.extractHash dHash
-           ]
-
+  toObject _ err = mkObject [ "kind" .= String "AlonzoBbodyPredFail"
+                            , "error" .= String (show err)
+                            ]
 
 --------------------------------------------------------------------------------
 -- Helper functions

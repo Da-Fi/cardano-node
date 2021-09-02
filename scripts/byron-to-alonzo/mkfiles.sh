@@ -50,7 +50,7 @@ POOL_NODES="node-pool1"
 
 ALL_NODES="${BFT_NODES} ${POOL_NODES}"
 
-INIT_SUPPLY=1002000000
+INIT_SUPPLY=10020000000
 FUNDS_PER_GENESIS_ADDRESS=$((${INIT_SUPPLY} / ${NUM_BFT_NODES}))
 FUNDS_PER_BYRON_ADDRESS=$((${FUNDS_PER_GENESIS_ADDRESS} - 1000000))
 # We need to allow for a fee to transfer the funds out of the genesis.
@@ -301,8 +301,8 @@ sed -i shelley/genesis.spec.json \
     -e 's/"activeSlotsCoeff": 5.0e-2/"activeSlotsCoeff": 0.1/' \
     -e 's/"securityParam": 2160/"securityParam": 10/' \
     -e 's/"epochLength": 432000/"epochLength": 1500/' \
-    -e 's/"maxLovelaceSupply": 0/"maxLovelaceSupply": 1000000000/' \
-    -e 's/"decentralisationParam": 1/"decentralisationParam": 0.7/' \
+    -e 's/"maxLovelaceSupply": 0/"maxLovelaceSupply": 1000000000000/' \
+    -e 's/"decentralisationParam": 1.0/"decentralisationParam": 0.7/' \
     -e 's/"major": 0/"major": 2/' \
     -e 's/"updateQuorum": 5/"updateQuorum": 2/'
 
@@ -469,38 +469,77 @@ echo " * Start the nodes"
 echo " * Initiate successive protocol updates"
 echo " * Query the node's ledger state"
 echo
-echo "To start the nodes, in separate terminals use:"
+echo "To start the nodes, in separate terminals use the following scripts:"
 echo
+
+mkdir -p run
+
 for NODE in ${BFT_NODES}; do
+  (
+    echo "#!/usr/bin/env bash"
+    echo ""
+    echo "cardano-node run \\"
+    echo "  --config                          ${ROOT}/configuration.yaml \\"
+    echo "  --topology                        ${ROOT}/${NODE}/topology.json \\"
+    echo "  --database-path                   ${ROOT}/${NODE}/db \\"
+    echo "  --socket-path                     ${ROOT}/${NODE}/node.sock \\"
+    echo "  --shelley-kes-key                 ${ROOT}/${NODE}/shelley/kes.skey \\"
+    echo "  --shelley-vrf-key                 ${ROOT}/${NODE}/shelley/vrf.skey \\"
+    echo "  --shelley-operational-certificate ${ROOT}/${NODE}/shelley/node.cert \\"
+    echo "  --port                            $(cat ${NODE}/port) \\"
+    echo "  --delegation-certificate          ${ROOT}/${NODE}/byron/delegate.cert \\"
+    echo "  --signing-key                     ${ROOT}/${NODE}/byron/delegate.key \\"
+    echo "  | tee -a ${ROOT}/${NODE}/node.log"
+  ) > run/${NODE}.sh
 
-  echo "cardano-node run \\"
-  echo "  --config                          ${ROOT}/configuration.yaml \\"
-  echo "  --topology                        ${ROOT}/${NODE}/topology.json \\"
-  echo "  --database-path                   ${ROOT}/${NODE}/db \\"
-  echo "  --socket-path                     ${ROOT}/${NODE}/node.sock \\"
-  echo "  --shelley-kes-key                 ${ROOT}/${NODE}/shelley/kes.skey \\"
-  echo "  --shelley-vrf-key                 ${ROOT}/${NODE}/shelley/vrf.skey \\"
-  echo "  --shelley-operational-certificate ${ROOT}/${NODE}/shelley/node.cert \\"
-  echo "  --port                            $(cat ${NODE}/port) \\"
-  echo "  --delegation-certificate          ${ROOT}/${NODE}/byron/delegate.cert \\"
-  echo "  --signing-key                     ${ROOT}/${NODE}/byron/delegate.key \\"
-  echo "  | tee -a ${ROOT}/${NODE}/node.log"
+  chmod a+x run/${NODE}.sh
 
+  echo $ROOT/run/${NODE}.sh
 done
+
 for NODE in ${POOL_NODES}; do
+  (
+    echo "#!/usr/bin/env bash"
+    echo ""
+    echo "cardano-node run \\"
+    echo "  --config                          ${ROOT}/configuration.yaml \\"
+    echo "  --topology                        ${ROOT}/${NODE}/topology.json \\"
+    echo "  --database-path                   ${ROOT}/${NODE}/db \\"
+    echo "  --socket-path                     ${ROOT}/${NODE}/node.sock \\"
+    echo "  --shelley-kes-key                 ${ROOT}/${NODE}/shelley/kes.skey \\"
+    echo "  --shelley-vrf-key                 ${ROOT}/${NODE}/shelley/vrf.skey \\"
+    echo "  --shelley-operational-certificate ${ROOT}/${NODE}/shelley/node.cert \\"
+    echo "  --port                            $(cat ${NODE}/port) \\"
+    echo "  | tee -a ${ROOT}/${NODE}/node.log"
+  ) > run/${NODE}.sh
 
-  echo "cardano-node run \\"
-  echo "  --config                          ${ROOT}/configuration.yaml \\"
-  echo "  --topology                        ${ROOT}/${NODE}/topology.json \\"
-  echo "  --database-path                   ${ROOT}/${NODE}/db \\"
-  echo "  --socket-path                     ${ROOT}/${NODE}/node.sock \\"
-  echo "  --shelley-kes-key                 ${ROOT}/${NODE}/shelley/kes.skey \\"
-  echo "  --shelley-vrf-key                 ${ROOT}/${NODE}/shelley/vrf.skey \\"
-  echo "  --shelley-operational-certificate ${ROOT}/${NODE}/shelley/node.cert \\"
-  echo "  --port                            $(cat ${NODE}/port) \\"
-  echo "  | tee -a ${ROOT}/${NODE}/node.log"
+  chmod a+x run/${NODE}.sh
 
+  echo $ROOT/run/${NODE}.sh
 done
+
+echo "#!/usr/bin/env bash" > run/all.sh
+echo "" >> run/all.sh
+
+chmod a+x run/all.sh
+
+for NODE in ${BFT_NODES}; do
+  echo "$ROOT/run/${NODE}.sh &" >> run/all.sh
+done
+
+for NODE in ${POOL_NODES}; do
+  echo "$ROOT/run/${NODE}.sh &" >> run/all.sh
+done
+
+echo "" >> run/all.sh
+echo "wait" >> run/all.sh
+
+chmod a+x run/all.sh
+
+echo
+echo "Alternatively, you can run all the nodes in one go:"
+echo
+echo "$ROOT/run/all.sh"
 
 echo
 echo "In order to do the protocol updates, proceed as follows:"
@@ -549,11 +588,16 @@ popd
 # For an automatic transition at epoch 0, specifying mary, allegra or shelley
 # will start the node in the appropriate era.
 echo ""
+
+# These are needed for cardano-submit-api
+echo "EnableLogMetrics: False" >> ${ROOT}/configuration.yaml
+echo "EnableLogging: True" >> ${ROOT}/configuration.yaml
+
 if [ "$1" = "alonzo" ]; then
-  echo "TestShelleyHardForkAtEpoch: 0"  >> ${ROOT}/configuration.yaml
-  echo "TestAllegraHardForkAtEpoch: 0"  >> ${ROOT}/configuration.yaml
-  echo "TestMaryHardForkAtEpoch: 0"  >> ${ROOT}/configuration.yaml
-  echo "TestAlonzoHardForkAtEpoch: 0"  >> ${ROOT}/configuration.yaml
+  echo "TestShelleyHardForkAtEpoch: 0" >> ${ROOT}/configuration.yaml
+  echo "TestAllegraHardForkAtEpoch: 0" >> ${ROOT}/configuration.yaml
+  echo "TestMaryHardForkAtEpoch: 0" >> ${ROOT}/configuration.yaml
+  echo "TestAlonzoHardForkAtEpoch: 0" >> ${ROOT}/configuration.yaml
   echo "TestEnableDevelopmentHardForkEras: True" >> ${ROOT}/configuration.yaml
   echo "TestEnableDevelopmentNetworkProtocols: True" >> ${ROOT}/configuration.yaml
 

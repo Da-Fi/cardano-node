@@ -28,9 +28,10 @@ import           Cardano.Tracing.OrphanInstances.Common
 import           Cardano.Tracing.Render
 
 import           Ouroboros.Consensus.Block (ConvertRawHash (..), getHeader)
-import           Ouroboros.Consensus.Ledger.SupportsMempool (GenTx, HasTxs (..), txForgetValidated,
-                   txId)
+import           Ouroboros.Consensus.Ledger.SupportsMempool (GenTx, HasTxs (..), txId)
 import           Ouroboros.Consensus.Node.Run (RunNode, estimateBlockSize)
+import qualified Ouroboros.Network.AnchoredFragment as AF
+import qualified Ouroboros.Network.AnchoredSeq as AS
 import           Ouroboros.Network.Block
 import           Ouroboros.Network.BlockFetch.ClientState (TraceFetchClientState,
                    TraceLabelPeer (..))
@@ -94,6 +95,7 @@ instance HasSeverityAnnotation NtN.AcceptConnectionsPolicyTrace where
 instance HasPrivacyAnnotation (TraceFetchClientState header)
 instance HasSeverityAnnotation (TraceFetchClientState header) where
   getSeverityAnnotation BlockFetch.AddedFetchRequest {} = Info
+  getSeverityAnnotation BlockFetch.SendFetchRequest {} = Info
   getSeverityAnnotation BlockFetch.AcknowledgedFetchRequest {} = Info
   getSeverityAnnotation BlockFetch.StartedFetchBatch {} = Info
   getSeverityAnnotation BlockFetch.CompletedBlockFetch {} = Info
@@ -427,7 +429,7 @@ instance ( ConvertTxId blk
              , "agency" .= String (pack $ show stok)
              , "blockHash" .= renderHeaderHash (Proxy @blk) (blockHash blk)
              , "blockSize" .= toJSON (estimateBlockSize (getHeader blk))
-             , "txIds" .= toJSON (presentTx <$> map txForgetValidated (extractTxs blk))
+             , "txIds" .= toJSON (presentTx <$> extractTxs blk)
              ]
       where
         presentTx :: GenTx blk -> Value
@@ -712,12 +714,28 @@ instance ToObject SlotNo where
     mkObject [ "kind" .= String "SlotNo"
              , "slot" .= toJSON (unSlotNo slot) ]
 
-
-instance ConvertRawHash header => ToObject (TraceFetchClientState header) where
+instance (HasHeader header, ConvertRawHash header)
+  => ToObject (TraceFetchClientState header) where
   toObject _verb BlockFetch.AddedFetchRequest {} =
     mkObject [ "kind" .= String "AddedFetchRequest" ]
   toObject _verb BlockFetch.AcknowledgedFetchRequest {} =
     mkObject [ "kind" .= String "AcknowledgedFetchRequest" ]
+  toObject _verb (BlockFetch.SendFetchRequest af) =
+    mkObject [ "kind" .= String "SendFetchRequest"
+             , "head" .= String (renderChainHash
+                                  (renderHeaderHash (Proxy @header))
+                                  (AF.headHash af))
+             , "length" .= toJSON (fragmentLength af)]
+   where
+     -- NOTE: this ignores the Byron era with its EBB complication:
+     -- the length would be underestimated by 1, if the AF is anchored
+     -- at the epoch boundary.
+     fragmentLength :: AF.AnchoredFragment header -> Int
+     fragmentLength f = fromIntegral . unBlockNo $
+        case (f, f) of
+          (AS.Empty{}, AS.Empty{}) -> 0
+          (firstHdr AS.:< _, _ AS.:> lastHdr) ->
+            blockNo lastHdr - blockNo firstHdr + 1
   toObject _verb (BlockFetch.CompletedBlockFetch pt _ _ _ _) =
     mkObject [ "kind"  .= String "CompletedBlockFetch"
              , "block" .= String

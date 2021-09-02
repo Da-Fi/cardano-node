@@ -4,19 +4,17 @@ module Test.Cardano.Api.Typed.Script
   ( tests
   ) where
 
-import           Cardano.Prelude
-
-import           Data.Aeson
-
 import           Cardano.Api
-
-import           Hedgehog (Property, discover)
-import qualified Hedgehog as H
+import           Cardano.Api.Shelley
+import           Cardano.Prelude
+import           Data.Aeson
+import           Gen.Cardano.Api.Typed
+import           Gen.Tasty.Hedgehog.Group (fromGroup)
+import           Hedgehog (Property, discover, (===))
 import           Hedgehog.Extras.Aeson
 import           Test.Tasty (TestTree)
-import           Test.Tasty.Hedgehog.Group (fromGroup)
 
-import           Test.Cardano.Api.Typed.Gen
+import qualified Hedgehog as H
 
 {- HLINT ignore "Use camelCase" -}
 
@@ -121,6 +119,12 @@ prop_roundtrip_SimpleScriptV2_JSON =
   H.property $ do
     mss <- H.forAll $ genSimpleScript SimpleScriptV2
     H.tripping mss encode eitherDecode
+
+prop_roundtrip_ScriptData :: Property
+prop_roundtrip_ScriptData =
+  H.property $ do
+    sData <- H.forAll genScriptData
+    sData === fromAlonzoData (toAlonzoData sData)
 
 -- -----------------------------------------------------------------------------
 

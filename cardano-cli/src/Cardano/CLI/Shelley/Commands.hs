@@ -118,12 +118,12 @@ data StakeAddressCmd
   = StakeAddressKeyGen VerificationKeyFile SigningKeyFile
   | StakeAddressKeyHash (VerificationKeyOrFile StakeKey) (Maybe OutputFile)
   | StakeAddressBuild (VerificationKeyOrFile StakeKey) NetworkId (Maybe OutputFile)
-  | StakeKeyRegistrationCert (VerificationKeyOrFile StakeKey) OutputFile
-  | StakeKeyDelegationCert
-      (VerificationKeyOrFile StakeKey)
+  | StakeRegistrationCert StakeVerifier OutputFile
+  | StakeCredentialDelegationCert
+      StakeVerifier
       (VerificationKeyOrHashOrFile StakePoolKey)
       OutputFile
-  | StakeKeyDeRegistrationCert (VerificationKeyOrFile StakeKey) OutputFile
+  | StakeCredentialDeRegistrationCert StakeVerifier OutputFile
   deriving Show
 
 renderStakeAddressCmd :: StakeAddressCmd -> Text
@@ -132,9 +132,9 @@ renderStakeAddressCmd cmd =
     StakeAddressKeyGen {} -> "stake-address key-gen"
     StakeAddressKeyHash {} -> "stake-address key-hash"
     StakeAddressBuild {} -> "stake-address build"
-    StakeKeyRegistrationCert {} -> "stake-address registration-certificate"
-    StakeKeyDelegationCert {} -> "stake-address delegation-certificate"
-    StakeKeyDeRegistrationCert {} -> "stake-address deregistration-certificate"
+    StakeRegistrationCert {} -> "stake-address registration-certificate"
+    StakeCredentialDelegationCert {} -> "stake-address delegation-certificate"
+    StakeCredentialDeRegistrationCert {} -> "stake-address deregistration-certificate"
 
 data KeyCmd
   = KeyGetVerificationKey SigningKeyFile VerificationKeyFile
@@ -162,10 +162,13 @@ renderKeyCmd cmd =
 data TransactionCmd
   = TxBuildRaw
       AnyCardanoEra
-      [(TxIn, Maybe ScriptFile)]
+      (Maybe ScriptValidity) -- ^ Mark script as expected to pass or fail validation
+      [(TxIn, Maybe (ScriptWitnessFiles WitCtxTxIn))]
       -- ^ Transaction inputs with optional spending scripts
+      [TxIn]
+      -- ^ Transaction inputs for collateral, only key witnesses, no scripts.
       [TxOutAnyEra]
-      (Maybe (Value, [ScriptFile]))
+      (Maybe (Value, [ScriptWitnessFiles WitCtxMint]))
       -- ^ Multi-Asset value with script witness
       (Maybe SlotNo)
       -- ^ Transaction lower bound
@@ -173,13 +176,48 @@ data TransactionCmd
       -- ^ Transaction upper bound
       (Maybe Lovelace)
       -- ^ Tx fee
-      [(CertificateFile, Maybe ScriptFile)]
+      [(CertificateFile, Maybe (ScriptWitnessFiles WitCtxStake))]
       -- ^ Certificates with potential script witness
-      [(StakeAddress, Lovelace, Maybe ScriptFile)]
+      [(StakeAddress, Lovelace, Maybe (ScriptWitnessFiles WitCtxStake))]
       TxMetadataJsonSchema
       [ScriptFile]
       -- ^ Auxillary scripts
       [MetadataFile]
+      (Maybe ProtocolParamsSourceSpec)
+      (Maybe UpdateProposalFile)
+      TxBodyFile
+
+    -- | Like 'TxBuildRaw' but without the fee, and with a change output.
+  | TxBuild
+      AnyCardanoEra
+      AnyConsensusModeParams
+      NetworkId
+      (Maybe ScriptValidity) -- ^ Mark script as expected to pass or fail validation
+      (Maybe Word)
+      -- ^ Override the required number of tx witnesses
+      [(TxIn, Maybe (ScriptWitnessFiles WitCtxTxIn))]
+      -- ^ Transaction inputs with optional spending scripts
+      [TxIn]
+      -- ^ Transaction inputs for collateral, only key witnesses, no scripts.
+      [TxOutAnyEra]
+      -- ^ Normal outputs
+      TxOutChangeAddress
+      -- ^ A change output
+      (Maybe (Value, [ScriptWitnessFiles WitCtxMint]))
+      -- ^ Multi-Asset value with script witness
+      (Maybe SlotNo)
+      -- ^ Transaction lower bound
+      (Maybe SlotNo)
+      -- ^ Transaction upper bound
+      [(CertificateFile, Maybe (ScriptWitnessFiles WitCtxStake))]
+      -- ^ Certificates with potential script witness
+      [(StakeAddress, Lovelace, Maybe (ScriptWitnessFiles WitCtxStake))]
+      -- ^ Withdrawals with potential script witness
+      TxMetadataJsonSchema
+      [ScriptFile]
+      -- ^ Auxillary scripts
+      [MetadataFile]
+      (Maybe ProtocolParamsSourceSpec)
       (Maybe UpdateProposalFile)
       TxBodyFile
   | TxSign TxBodyFile [WitnessSigningData] (Maybe NetworkId) TxFile
@@ -198,6 +236,8 @@ data TransactionCmd
   | TxCalculateMinValue
       ProtocolParamsSourceSpec
       Value
+  | TxHashScriptData
+      ScriptDataOrFile
   | TxGetTxId InputTxFile
   | TxView InputTxFile
   deriving Show
@@ -219,6 +259,7 @@ data ProtocolParamsSourceSpec
 renderTransactionCmd :: TransactionCmd -> Text
 renderTransactionCmd cmd =
   case cmd of
+    TxBuild {} -> "transaction build"
     TxBuildRaw {} -> "transaction build-raw"
     TxSign {} -> "transaction sign"
     TxCreateWitness {} -> "transaction witness"
@@ -227,6 +268,7 @@ renderTransactionCmd cmd =
     TxMintedPolicyId {} -> "transaction policyid"
     TxCalculateMinFee {} -> "transaction calculate-min-fee"
     TxCalculateMinValue {} -> "transaction calculate-min-value"
+    TxHashScriptData {} -> "transaction hash-script-data"
     TxGetTxId {} -> "transaction txid"
     TxView {} -> "transaction view"
 
@@ -296,7 +338,7 @@ data QueryCmd =
   | QueryTip AnyConsensusModeParams NetworkId (Maybe OutputFile)
   | QueryStakeDistribution' AnyConsensusModeParams NetworkId (Maybe OutputFile)
   | QueryStakeAddressInfo AnyConsensusModeParams StakeAddress NetworkId (Maybe OutputFile)
-  | QueryUTxO' AnyConsensusModeParams QueryFilter NetworkId (Maybe OutputFile)
+  | QueryUTxO' AnyConsensusModeParams QueryUTxOFilter NetworkId (Maybe OutputFile)
   | QueryDebugLedgerState' AnyConsensusModeParams NetworkId (Maybe OutputFile)
   | QueryProtocolState' AnyConsensusModeParams NetworkId (Maybe OutputFile)
   | QueryStakeSnapshot' AnyConsensusModeParams NetworkId (Hash StakePoolKey)

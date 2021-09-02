@@ -1,18 +1,25 @@
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralisedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE StandaloneDeriving #-}
 
 module Cardano.CLI.Types
-  ( CBORObject (..)
+  ( BalanceTxExecUnits (..)
+  , CBORObject (..)
   , CertificateFile (..)
   , GenesisFile (..)
   , OutputFormat (..)
-  , QueryFilter (..)
   , SigningKeyFile (..)
   , SocketPath (..)
   , ScriptFile (..)
+  , ScriptDataOrFile (..)
+  , ScriptRedeemerOrFile
+  , ScriptWitnessFiles (..)
+  , ScriptDatumOrFile (..)
   , TransferDirection(..)
   , TxOutAnyEra (..)
+  , TxOutChangeAddress (..)
   , UpdateProposalFile (..)
   , VerificationKeyFile (..)
   , Stakes (..)
@@ -61,12 +68,6 @@ instance FromJSON GenesisFile where
 data OutputFormat
   = OutputFormatHex
   | OutputFormatBech32
-  deriving (Eq, Show)
-
--- | UTxO query filtering options.
-data QueryFilter
-  = FilterByAddress !(Set AddressAny)
-  | NoFilter
   deriving (Eq, Show)
 
 -- | This data structure is used to allow nicely formatted output within the query stake-snapshot command.
@@ -145,6 +146,39 @@ newtype VerificationKeyFile
 newtype ScriptFile = ScriptFile { unScriptFile :: FilePath }
                      deriving (Eq, Show)
 
+data ScriptDataOrFile = ScriptDataFile  FilePath   -- ^ By reference to a file
+                      | ScriptDataValue ScriptData -- ^ By value
+  deriving (Eq, Show)
+
+type ScriptRedeemerOrFile = ScriptDataOrFile
+
+-- | This type is like 'ScriptWitness', but the file paths from which to load
+-- the script witness data representation.
+--
+-- It is era-independent, but witness context-dependent.
+--
+data ScriptWitnessFiles witctx where
+     SimpleScriptWitnessFile  :: ScriptFile
+                              -> ScriptWitnessFiles witctx
+
+     PlutusScriptWitnessFiles :: ScriptFile
+                              -> ScriptDatumOrFile witctx
+                              -> ScriptRedeemerOrFile
+                              -> ExecutionUnits
+                              -> ScriptWitnessFiles witctx
+
+deriving instance Show (ScriptWitnessFiles witctx)
+
+data ScriptDatumOrFile witctx where
+     ScriptDatumOrFileForTxIn    :: ScriptDataOrFile
+                                 -> ScriptDatumOrFile WitCtxTxIn
+
+     NoScriptDatumOrFileForMint  :: ScriptDatumOrFile WitCtxMint
+     NoScriptDatumOrFileForStake :: ScriptDatumOrFile WitCtxStake
+
+deriving instance Show (ScriptDatumOrFile witctx)
+
+
 -- | Determines the direction in which the MIR certificate will transfer ADA.
 data TransferDirection = TransferToReserves | TransferToTreasury
                          deriving Show
@@ -154,6 +188,24 @@ data TransferDirection = TransferToReserves | TransferToTreasury
 -- values passed on the command line. It can be converted into the
 -- era-dependent 'TxOutValue' type.
 --
-data TxOutAnyEra = TxOutAnyEra AddressAny Value
-                   -- TODO alonzo: ^^ add support for tx out data
+data TxOutAnyEra = TxOutAnyEra
+                     AddressAny
+                     Value
+                     (Maybe (Hash ScriptData))
   deriving (Eq, Show)
+
+-- | A partially-specified transaction output indented to use as a change
+-- output.
+--
+-- It does not specify a value, since this will be worked out automatically.
+--
+-- It does not use any script data hash, since that's generally not used for
+-- change outputs.
+--
+newtype TxOutChangeAddress = TxOutChangeAddress AddressAny
+  deriving (Eq, Show)
+
+-- | A flag that differentiates between automatically
+-- and manually balancing a tx.
+data BalanceTxExecUnits = AutoBalance | ManualBalance
+

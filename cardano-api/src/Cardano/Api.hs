@@ -16,6 +16,7 @@ module Cardano.Api (
     ShelleyEra,
     AllegraEra,
     MaryEra,
+    AlonzoEra,
     CardanoEra(..),
     IsCardanoEra(..),
     AnyCardanoEra(..),
@@ -28,6 +29,7 @@ module Cardano.Api (
     InAnyShelleyBasedEra(..),
     CardanoEraStyle(..),
     cardanoEraStyle,
+    shelleyBasedToCardanoEra,
 
     -- ** Deprecated
     Byron,
@@ -72,6 +74,7 @@ module Cardano.Api (
     -- ** Shelley addresses
     makeShelleyAddress,
     PaymentCredential(..),
+    StakeAddressPointer(..),
     StakeAddressReference(..),
     PaymentKey,
     PaymentExtendedKey,
@@ -105,6 +108,7 @@ module Cardano.Api (
     -- ** Multi-asset values
     Quantity(..),
     PolicyId(..),
+    scriptPolicyId,
     AssetName(..),
     AssetId(..),
     Value,
@@ -117,6 +121,8 @@ module Cardano.Api (
     ValueNestedBundle(..),
     valueToNestedRep,
     valueFromNestedRep,
+    renderValue,
+    renderValuePretty,
 
     -- ** Ada \/ Lovelace within multi-asset values
     quantityToLovelace,
@@ -150,6 +156,7 @@ module Cardano.Api (
     makeTransactionBody,
     TxBodyContent(..),
     TxBodyError(..),
+    TxBodyScriptData(..),
 
     -- ** Transaction Ids
     TxId(..),
@@ -166,6 +173,7 @@ module Cardano.Api (
     TxOutDatumHash(..),
 
     -- ** Other transaction body types
+    TxInsCollateral(..),
     TxFee(..),
     TxValidityLowerBound(..),
     TxValidityUpperBound(..),
@@ -173,7 +181,7 @@ module Cardano.Api (
     EpochSlots(..),
     TxMetadataInEra(..),
     TxAuxScripts(..),
-    TxAuxScriptData(..),
+    TxExtraScriptData(..),
     TxExtraKeyWitnesses(..),
     TxWithdrawals(..),
     TxCertificates(..),
@@ -186,6 +194,7 @@ module Cardano.Api (
     ViewTx,
 
     -- ** Era-dependent transaction body features
+    CollateralSupportedInEra(..),
     MultiAssetSupportedInEra(..),
     OnlyAdaSupportedInEra(..),
     TxFeesExplicitInEra(..),
@@ -196,11 +205,13 @@ module Cardano.Api (
     TxMetadataSupportedInEra(..),
     AuxScriptsSupportedInEra(..),
     TxExtraKeyWitnessesSupportedInEra(..),
+    ScriptDataSupportedInEra(..),
     WithdrawalsSupportedInEra(..),
     CertificatesSupportedInEra(..),
     UpdateProposalSupportedInEra(..),
 
     -- ** Feature availability functions
+    collateralSupportedInEra,
     multiAssetSupportedInEra,
     txFeesExplicitInEra,
     validityUpperBoundSupportedInEra,
@@ -212,6 +223,31 @@ module Cardano.Api (
     withdrawalsSupportedInEra,
     certificatesSupportedInEra,
     updateProposalSupportedInEra,
+    scriptDataSupportedInEra,
+
+    -- ** Fee calculation
+    transactionFee,
+    estimateTransactionFee,
+    evaluateTransactionFee,
+    estimateTransactionKeyWitnessCount,
+
+    -- ** Script execution units
+    evaluateTransactionExecutionUnits,
+    ScriptExecutionError(..),
+    TransactionValidityIntervalError,
+
+    -- ** Transaction balance
+    evaluateTransactionBalance,
+
+    -- ** Building transactions with automated fees and balancing
+    makeTransactionBodyAutoBalance,
+    TxBodyErrorAutoBalance(..),
+    TxScriptValidity(..),
+    ScriptValidity(..),
+    TxScriptValiditySupportedInEra(..),
+    scriptValidityToTxScriptValidity,
+    txScriptValiditySupportedInShelleyBasedEra,
+    txScriptValiditySupportedInCardanoEra,
 
     -- * Signing transactions
     -- | Creating transaction witnesses one by one, or all in one go.
@@ -230,10 +266,6 @@ module Cardano.Api (
     ShelleyWitnessSigningKey(..),
     makeShelleyKeyWitness,
     makeShelleyBootstrapWitness,
-
-    -- * Fee calculation
-    transactionFee,
-    estimateTransactionFee,
 
     -- * Transaction metadata
     -- | Embedding additional structured data within transactions.
@@ -286,10 +318,12 @@ module Cardano.Api (
     -- ** Script languages
     SimpleScriptV1,
     SimpleScriptV2,
+    PlutusScriptV1,
     ScriptLanguage(..),
     SimpleScriptVersion(..),
     PlutusScriptVersion(..),
     AnyScriptLanguage(..),
+    AnyPlutusScriptVersion(..),
     IsScriptLanguage(..),
     IsSimpleScriptLanguage(..),
 
@@ -305,16 +339,25 @@ module Cardano.Api (
     toScriptInEra,
     eraOfScriptInEra,
 
-    -- * Use of a script in an era as a witness
+    -- ** Use of a script in an era as a witness
     WitCtxTxIn, WitCtxMint, WitCtxStake,
+    WitCtx(..),
     ScriptWitness(..),
     Witness(..),
     KeyWitnessInCtx(..),
     ScriptWitnessInCtx(..),
     ScriptDatum(..),
     ScriptRedeemer,
+    scriptWitnessScript,
 
-    -- *** Languages supported in each era
+    -- ** Inspecting 'ScriptWitness'es
+    AnyScriptWitness(..),
+    ScriptWitnessIndex(..),
+    renderScriptWitnessIndex,
+    collectTxBodyScriptWitnesses,
+    mapTxScriptWitnesses,
+
+    -- ** Languages supported in each era
     ScriptLanguageInEra(..),
     scriptLanguageSupportedInEra,
     languageOfScriptLanguageInEra,
@@ -329,9 +372,29 @@ module Cardano.Api (
 
     -- ** Plutus scripts
     PlutusScript,
+    examplePlutusScriptAlwaysSucceeds,
+    examplePlutusScriptAlwaysFails,
 
     -- ** Script data
     ScriptData(..),
+    hashScriptData,
+
+    -- ** Validation
+    ScriptDataRangeError (..),
+    validateScriptData,
+
+    -- ** Conversion to\/from JSON
+    ScriptDataJsonSchema (..),
+    scriptDataFromJson,
+    scriptDataToJson,
+    ScriptDataJsonError (..),
+    ScriptDataJsonSchemaError (..),
+
+    -- ** Script execution units
+    ExecutionUnits(..),
+    ExecutionUnitPrices(..),
+    CostModel(..),
+    validateCostModel,
 
     -- ** Script addresses
     -- | Making addresses from scripts.
@@ -433,6 +496,7 @@ module Cardano.Api (
 
     -- ** Low level protocol interaction with a Cardano node
     connectToLocalNode,
+    connectToLocalNodeWithVersion,
     LocalNodeConnectInfo(..),
     AnyConsensusMode(..),
     renderMode,
@@ -467,7 +531,13 @@ module Cardano.Api (
     LocalStateQueryClient(..),
     QueryInMode(..),
     QueryInEra(..),
+    QueryInShelleyBasedEra(..),
+    QueryUTxOFilter(..),
+    UTxO(..),
     queryNodeLocalState,
+
+    EraHistory(..),
+    getProgress,
 
     -- *** Common queries
     getLocalChainTip,
@@ -489,6 +559,9 @@ module Cardano.Api (
     GenesisDelegateExtendedKey,
     GenesisUTxOKey,
     genesisUTxOPseudoTxIn,
+
+    -- ** Genesis paramaters
+    GenesisParameters(..),
 
     -- * Special transactions
     -- | There are various additional things that can be embedded in a
@@ -515,6 +588,13 @@ module Cardano.Api (
     SlotsInEpoch(..),
     SlotsToEpochEnd(..),
     slotToEpoch,
+
+    NodeToClientVersion(..),
+
+    -- ** Monadic queries
+    LocalStateQueryScript,
+    sendMsgQuery,
+    setupLocalStateQueryScript
   ) where
 
 import           Cardano.Api.Address
@@ -523,9 +603,11 @@ import           Cardano.Api.Certificate
 import           Cardano.Api.Eras
 import           Cardano.Api.Error
 import           Cardano.Api.Fees
+import           Cardano.Api.GenesisParameters
 import           Cardano.Api.HasTypeProxy
 import           Cardano.Api.Hash
 import           Cardano.Api.IPC
+import           Cardano.Api.IPC.Monad
 import           Cardano.Api.Key
 import           Cardano.Api.KeysByron
 import           Cardano.Api.KeysPraos
@@ -535,8 +617,9 @@ import           Cardano.Api.Modes
 import           Cardano.Api.NetworkId
 import           Cardano.Api.OperationalCertificate
 import           Cardano.Api.ProtocolParameters
-import           Cardano.Api.Query (SlotsInEpoch(..), SlotsToEpochEnd(..), slotToEpoch)
+import           Cardano.Api.Query hiding (LedgerState (..))
 import           Cardano.Api.Script
+import           Cardano.Api.ScriptData
 import           Cardano.Api.SerialiseBech32
 import           Cardano.Api.SerialiseCBOR
 import           Cardano.Api.SerialiseJSON

@@ -1,7 +1,7 @@
-cabal-version: 2.4
+cabal-version: 3.0
 
 name:                   cardano-api
-version:                1.27.0
+version:                1.28.0
 description:            The cardano api
 author:                 IOHK
 maintainer:             operations@iohk.io
@@ -57,9 +57,12 @@ library
                         Cardano.Api.Eras
                         Cardano.Api.Error
                         Cardano.Api.Fees
+                        Cardano.Api.GenesisParameters
                         Cardano.Api.Hash
                         Cardano.Api.HasTypeProxy
                         Cardano.Api.IPC
+                        Cardano.Api.IPC.Monad
+                        Cardano.Api.Json
                         Cardano.Api.Key
                         Cardano.Api.KeysByron
                         Cardano.Api.KeysPraos
@@ -71,11 +74,13 @@ library
                         Cardano.Api.ProtocolParameters
                         Cardano.Api.Query
                         Cardano.Api.Script
+                        Cardano.Api.ScriptData
                         Cardano.Api.SerialiseBech32
                         Cardano.Api.SerialiseCBOR
                         Cardano.Api.SerialiseJSON
                         Cardano.Api.SerialiseRaw
                         Cardano.Api.SerialiseTextEnvelope
+                        Cardano.Api.SerialiseUsing
                         Cardano.Api.Shelley.Genesis
                         Cardano.Api.SpecialByron
                         Cardano.Api.StakePoolMetadata
@@ -91,6 +96,7 @@ library
   build-depends:        aeson             >= 1.5.6.0
                       , aeson-pretty      >= 0.8.5
                       , attoparsec
+                      , array
                       , base16-bytestring >= 1.0
                       , base58-bytestring
                       , bech32 >= 1.1.0
@@ -124,6 +130,7 @@ library
                       , ouroboros-network
                       , ouroboros-network-framework
                       , plutus-ledger-api
+                      , prettyprinter
                       , scientific
                       , shelley-spec-ledger
                       , small-steps
@@ -138,6 +145,40 @@ library
                       , vector
                       , yaml
 
+library gen
+  import:               base, project-config
+
+  visibility:           public
+
+  hs-source-dirs:       gen
+
+  exposed-modules:      Gen.Cardano.Api
+                        Gen.Cardano.Api.Metadata
+                        Gen.Cardano.Api.Typed
+                        Gen.Cardano.Crypto.Seed
+                        Gen.Hedgehog.Roundtrip.Bech32
+                        Gen.Hedgehog.Roundtrip.CBOR
+                        Gen.Tasty.Hedgehog.Group
+
+  build-depends:        aeson             >= 1.5.6.0
+                      , base16-bytestring
+                      , bytestring
+                      , cardano-api
+                      , cardano-binary
+                      , cardano-crypto-class
+                      , cardano-crypto-test
+                      , cardano-ledger-alonzo
+                      , cardano-ledger-byron-test
+                      , cardano-ledger-core
+                      , cardano-prelude
+                      , containers
+                      , hedgehog
+                      , plutus-ledger-api
+                      , shelley-spec-ledger
+                      , tasty
+                      , tasty-hedgehog
+                      , text
+
 test-suite cardano-api-test
   import:               base, project-config
   hs-source-dirs:       test
@@ -145,15 +186,14 @@ test-suite cardano-api-test
   type:                 exitcode-stdio-1.0
 
   build-depends:        aeson             >= 1.5.6.0
-                      , base16-bytestring
                       , bytestring
                       , cardano-api
+                      , cardano-api:gen
                       , cardano-binary
                       , cardano-crypto
                       , cardano-crypto-class
                       , cardano-crypto-test
                       , cardano-crypto-tests
-                      , cardano-ledger-byron-test
                       , cardano-ledger-core
                       , cardano-prelude
                       , cardano-slotting
@@ -166,25 +206,23 @@ test-suite cardano-api-test
                       , shelley-spec-ledger
                       , shelley-spec-ledger-test
                       , tasty
-                      , tasty-hedgehog
                       , tasty-quickcheck
-                      , text
                       , time
 
   other-modules:        Test.Cardano.Api.Crypto
-                        Test.Cardano.Api.Gen
                         Test.Cardano.Api.Genesis
+                        Test.Cardano.Api.Json
+                        Test.Cardano.Api.KeysByron
                         Test.Cardano.Api.Ledger
                         Test.Cardano.Api.Metadata
                         Test.Cardano.Api.Typed.Bech32
                         Test.Cardano.Api.Typed.CBOR
                         Test.Cardano.Api.Typed.Envelope
-                        Test.Cardano.Api.Typed.Gen
                         Test.Cardano.Api.Typed.JSON
+                        Test.Cardano.Api.Typed.Ord
                         Test.Cardano.Api.Typed.Orphans
                         Test.Cardano.Api.Typed.RawBytes
                         Test.Cardano.Api.Typed.Script
                         Test.Cardano.Api.Typed.Value
-                        Test.Tasty.Hedgehog.Group
 
   ghc-options:          -threaded -rtsopts -with-rtsopts=-N -with-rtsopts=-T

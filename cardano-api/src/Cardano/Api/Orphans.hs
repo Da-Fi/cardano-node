@@ -3,8 +3,8 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -16,43 +16,49 @@ module Cardano.Api.Orphans () where
 
 import           Prelude
 
-import           Cardano.Prelude (panic)
-import           Control.Iterate.SetAlgebra (BiMap (..), Bimap)
-import           Data.Aeson (FromJSON (..), ToJSON (..), object, (.=), (.:), (.:?))
+import           Data.Aeson (FromJSON (..), ToJSON (..), object, (.!=), (.:), (.:?), (.=))
 import qualified Data.Aeson as Aeson
 import           Data.Aeson.Types (FromJSONKey (..), ToJSONKey (..), toJSONKeyText)
 import qualified Data.ByteString.Base16 as B16
-import qualified Data.ByteString.Lazy as LBS
-import qualified Data.ByteString.Short as SBS
 import qualified Data.Map.Strict as Map
-import           Data.Map.Strict (Map)
-import           Data.MemoBytes (MemoBytes)
-import           Data.Scientific
 import           Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as Text
 
+import           Control.Applicative
+import           Control.Iterate.SetAlgebra (BiMap (..), Bimap)
+
+import           Cardano.Api.Json
+import           Cardano.Ledger.BaseTypes (StrictMaybe (..), strictMaybeToMaybe)
+import qualified Cardano.Ledger.BaseTypes as Ledger
+import           Cardano.Ledger.Crypto (StandardCrypto)
+import           Cardano.Slotting.Slot (SlotNo (..))
+
 import qualified Cardano.Crypto.Hash.Class as Crypto
+import qualified Cardano.Ledger.Alonzo as Alonzo
 import qualified Cardano.Ledger.Alonzo.Genesis as Alonzo
 import qualified Cardano.Ledger.Alonzo.Language as Alonzo
+import qualified Cardano.Ledger.Alonzo.PParams as Alonzo
 import qualified Cardano.Ledger.Alonzo.Scripts as Alonzo
+import qualified Cardano.Ledger.Alonzo.TxBody as Alonzo
 import qualified Cardano.Ledger.Coin as Shelley
 import qualified Cardano.Ledger.Core as Core
+import qualified Cardano.Ledger.Core as Ledger
 import qualified Cardano.Ledger.Crypto as Crypto
+import qualified Cardano.Ledger.Era as Ledger
 import qualified Cardano.Ledger.Mary.Value as Mary
 import qualified Cardano.Ledger.SafeHash as SafeHash
 import qualified Cardano.Ledger.Shelley.Constraints as Shelley
-import           Cardano.Slotting.Slot (SlotNo (..))
 import qualified Ouroboros.Consensus.Shelley.Eras as Consensus
-import qualified Plutus.V1.Ledger.Api as Plutus
 import qualified Shelley.Spec.Ledger.API as Shelley
-import           Shelley.Spec.Ledger.BaseTypes (StrictMaybe (..))
 import qualified Shelley.Spec.Ledger.Delegation.Certificates as Shelley
 import qualified Shelley.Spec.Ledger.EpochBoundary as ShelleyEpoch
 import qualified Shelley.Spec.Ledger.LedgerState as ShelleyLedger
 import           Shelley.Spec.Ledger.PParams (PParamsUpdate)
-import qualified Shelley.Spec.Ledger.Rewards as Shelley
 import qualified Shelley.Spec.Ledger.RewardUpdate as Shelley
+import qualified Shelley.Spec.Ledger.Rewards as Shelley
+
+import           Plutus.V1.Ledger.Api (defaultCostModelParams)
 
 -- Orphan instances involved in the JSON output of the API queries.
 -- We will remove/replace these as we provide more API wrapper types
@@ -140,8 +146,7 @@ instance ToJSON (PParamsUpdate era) where
      ++ [ "poolDeposit"           .= x | x <- mbfield (Shelley._poolDeposit pp) ]
      ++ [ "eMax"                  .= x | x <- mbfield (Shelley._eMax pp) ]
      ++ [ "nOpt"                  .= x | x <- mbfield (Shelley._nOpt pp) ]
-     ++ [ "a0" .= (fromRational x :: Scientific)
-                                       | x <- mbfield (Shelley._a0 pp) ]
+     ++ [ "a0"                    .= x | x <- mbfield (Shelley._a0 pp) ]
      ++ [ "rho"                   .= x | x <- mbfield (Shelley._rho pp) ]
      ++ [ "tau"                   .= x | x <- mbfield (Shelley._tau pp) ]
      ++ [ "decentralisationParam" .= x | x <- mbfield (Shelley._d pp) ]
@@ -297,52 +302,55 @@ instance ToJSON (SafeHash.SafeHash c a) where
 instance ToJSON Alonzo.ExUnits
 deriving instance FromJSON Alonzo.ExUnits
 
-deriving instance ToJSON Alonzo.Prices
-deriving instance FromJSON Alonzo.Prices
+instance ToJSON Alonzo.Prices where
+  toJSON Alonzo.Prices { Alonzo.prSteps, Alonzo.prMem } =
+    -- We cannot round-trip via NonNegativeInterval, so we go via Rational
+    object [ "prSteps" .= toRationalJSON (Ledger.unboundRational prSteps)
+           , "prMem"   .= toRationalJSON (Ledger.unboundRational prMem)
+           ]
 
--- TODO alonzo: This ShortByteString instances should be deleted
--- See https://github.com/input-output-hk/cardano-node/pull/2740
-instance ToJSON SBS.ShortByteString where
-  toJSON = Aeson.String . Text.decodeLatin1 . B16.encode . SBS.fromShort
-instance FromJSON SBS.ShortByteString where
-  parseJSON v = case v of
-    Aeson.String b16 -> case B16.decode $ Text.encodeUtf8 b16 of
-      Right decoded -> return $ SBS.toShort decoded
-      Left err -> fail err
-    wrong -> fail $ "Error decoding ShortByteString. Expected a JSON string but got: " <> show wrong
-
--- TODO alonzo: Try to get cardano-ledger-specs to provide these instances
--- See https://github.com/input-output-hk/cardano-node/pull/2740
-instance FromJSON (MemoBytes (Map Text Integer))
-instance ToJSON (MemoBytes (Map Text Integer))
+instance FromJSON Alonzo.Prices where
+  parseJSON =
+    Aeson.withObject "prices" $ \o -> do
+      steps <- o .: "prSteps"
+      mem   <- o .: "prMem"
+      prSteps <- checkBoundedRational steps
+      prMem   <- checkBoundedRational mem
+      return Alonzo.Prices { Alonzo.prSteps, Alonzo.prMem }
+    where
+      -- We cannot round-trip via NonNegativeInterval, so we go via Rational
+      checkBoundedRational r =
+        case Ledger.boundRational r of
+          Nothing -> fail ("too much precision for bounded rational: " ++ show r)
+          Just s  -> return s
 
 deriving newtype instance FromJSON Alonzo.CostModel
 deriving newtype instance ToJSON Alonzo.CostModel
 
+
+languageToText :: Alonzo.Language -> Text
+languageToText Alonzo.PlutusV1 = "PlutusV1"
+
+languageFromText :: MonadFail m => Text -> m Alonzo.Language
+languageFromText "PlutusV1" = pure Alonzo.PlutusV1
+languageFromText lang = fail $ "Error decoding Language: " ++ show lang
+
 instance FromJSON Alonzo.Language where
-  parseJSON v = case v of
-    Aeson.String "PlutusV1" -> return Alonzo.PlutusV1
-    wrong -> fail $ "Error decoding Language. Expected a JSON string but got: " <> show wrong
+  parseJSON = Aeson.withText "Language" languageFromText
+
 instance ToJSON Alonzo.Language where
-  toJSON Alonzo.PlutusV1 = Aeson.String "PlutusV1"
+  toJSON = Aeson.String . languageToText
 
 instance ToJSONKey Alonzo.Language where
-  toJSONKey = toJSONKeyText (Text.decodeLatin1 . LBS.toStrict . Aeson.encode)
+  toJSONKey = toJSONKeyText languageToText
 
 instance FromJSONKey Alonzo.Language where
-  fromJSONKey = Aeson.FromJSONKeyText parseLang
-   where
-     parseLang :: Text -> Alonzo.Language
-     parseLang lang = case Aeson.eitherDecode $ LBS.fromStrict $ Text.encodeUtf8 lang of
-        Left err -> panic $ Text.pack err
-        Right lang' -> lang'
+  fromJSONKey = Aeson.FromJSONKeyTextParser languageFromText
 
--- We defer parsing of the cost model so that we can
--- read it as a filepath. This is to reduce further pollution
--- of the genesis file.
 instance FromJSON Alonzo.AlonzoGenesis where
   parseJSON = Aeson.withObject "Alonzo Genesis" $ \o -> do
-    adaPerUTxOWord       <- o .:  "adaPerUTxOWord"
+    coinsPerUTxOWord     <- o .:  "lovelacePerUTxOWord"
+                        <|> o .:  "adaPerUTxOWord" --TODO: deprecate
     cModels              <- o .:? "costModels"
     prices               <- o .:  "executionPrices"
     maxTxExUnits         <- o .:  "maxTxExUnits"
@@ -351,10 +359,10 @@ instance FromJSON Alonzo.AlonzoGenesis where
     collateralPercentage <- o .:  "collateralPercentage"
     maxCollateralInputs  <- o .:  "maxCollateralInputs"
     case cModels of
-      Nothing -> case Plutus.defaultCekCostModelParams of
+      Nothing -> case Alonzo.CostModel <$> defaultCostModelParams of
         Just m -> return Alonzo.AlonzoGenesis
-          { Alonzo.adaPerUTxOWord
-          , Alonzo.costmdls = Map.singleton Alonzo.PlutusV1 (Alonzo.CostModel m)
+          { Alonzo.coinsPerUTxOWord
+          , Alonzo.costmdls = Map.singleton Alonzo.PlutusV1 m
           , Alonzo.prices
           , Alonzo.maxTxExUnits
           , Alonzo.maxBlockExUnits
@@ -362,9 +370,9 @@ instance FromJSON Alonzo.AlonzoGenesis where
           , Alonzo.collateralPercentage
           , Alonzo.maxCollateralInputs
           }
-        Nothing -> fail "Failed to extract the cost model params from Plutus.defaultCostModel"
+        Nothing -> fail "Failed to extract the cost model params from defaultCostModel"
       Just costmdls -> return Alonzo.AlonzoGenesis
-        { Alonzo.adaPerUTxOWord
+        { Alonzo.coinsPerUTxOWord
         , Alonzo.costmdls
         , Alonzo.prices
         , Alonzo.maxTxExUnits
@@ -379,7 +387,7 @@ instance FromJSON Alonzo.AlonzoGenesis where
 -- and keep the cost model (which is chunky) as a separate file.
 instance ToJSON Alonzo.AlonzoGenesis where
   toJSON v = object
-      [ "adaPerUTxOWord" .= Alonzo.adaPerUTxOWord v
+      [ "lovelacePerUTxOWord" .= Alonzo.coinsPerUTxOWord v
       , "costModels" .= Alonzo.costmdls v
       , "executionPrices" .= Alonzo.prices v
       , "maxTxExUnits" .= Alonzo.maxTxExUnits v
@@ -388,3 +396,77 @@ instance ToJSON Alonzo.AlonzoGenesis where
       , "collateralPercentage" .= Alonzo.collateralPercentage v
       , "maxCollateralInputs" .= Alonzo.maxCollateralInputs v
       ]
+
+instance ToJSON (Alonzo.PParams era) where
+  toJSON pp =
+    Aeson.object
+      [ "minFeeA" .= Alonzo._minfeeA pp
+      , "minFeeB" .= Alonzo._minfeeB pp
+      , "maxBlockBodySize" .= Alonzo._maxBBSize pp
+      , "maxTxSize" .= Alonzo._maxTxSize pp
+      , "maxBlockHeaderSize" .= Alonzo._maxBHSize pp
+      , "keyDeposit" .= Alonzo._keyDeposit pp
+      , "poolDeposit" .= Alonzo._poolDeposit pp
+      , "eMax" .= Alonzo._eMax pp
+      , "nOpt" .= Alonzo._nOpt pp
+      , "a0"  .= Alonzo._a0 pp
+      , "rho" .= Alonzo._rho pp
+      , "tau" .= Alonzo._tau pp
+      , "decentralisationParam" .= Alonzo._d pp
+      , "extraEntropy" .= Alonzo._extraEntropy pp
+      , "protocolVersion" .= Alonzo._protocolVersion pp
+      , "minPoolCost" .= Alonzo._minPoolCost pp
+      , "lovelacePerUTxOWord" .= Alonzo._coinsPerUTxOWord pp
+      , "costmdls" .= Alonzo._costmdls pp
+      , "prices" .= Alonzo._prices pp
+      , "maxTxExUnits" .= Alonzo._maxTxExUnits pp
+      , "maxBlockExUnits" .= Alonzo._maxBlockExUnits pp
+      , "maxValSize" .= Alonzo._maxValSize pp
+      , "collateralPercentage" .= Alonzo._collateralPercentage pp
+      , "maxCollateralInputs " .= Alonzo._maxCollateralInputs pp
+      ]
+
+instance FromJSON (Alonzo.PParams era) where
+  parseJSON =
+    Aeson.withObject "PParams" $ \obj ->
+      Alonzo.PParams
+        <$> obj .: "minFeeA"
+        <*> obj .: "minFeeB"
+        <*> obj .: "maxBlockBodySize"
+        <*> obj .: "maxTxSize"
+        <*> obj .: "maxBlockHeaderSize"
+        <*> obj .: "keyDeposit"
+        <*> obj .: "poolDeposit"
+        <*> obj .: "eMax"
+        <*> obj .: "nOpt"
+        <*> obj .: "a0"
+        <*> obj .: "rho"
+        <*> obj .: "tau"
+        <*> obj .: "decentralisationParam"
+        <*> obj .: "extraEntropy"
+        <*> obj .: "protocolVersion"
+        <*> obj .: "minPoolCost" .!= mempty
+        <*> obj .: "lovelacePerUTxOWord"
+        <*> obj .: "costmdls"
+        <*> obj .: "prices"
+        <*> obj .: "maxTxExUnits"
+        <*> obj .: "maxBlockExUnits"
+        <*> obj .: "maxValSize"
+        <*> obj .: "collateralPercentage"
+        <*> obj .: "maxCollateralInputs"
+
+deriving instance ToJSON (Alonzo.PParamsUpdate (Alonzo.AlonzoEra StandardCrypto))
+
+instance (Ledger.Era era, Show (Ledger.Value era), ToJSON (Ledger.Value era))
+    => ToJSON (Alonzo.TxOut era) where
+  toJSON (Alonzo.TxOut addr v dataHash) =
+    object [ "address" .= toJSON addr
+           , "value" .= toJSON v
+           , "datahash" .= case strictMaybeToMaybe dataHash of
+                             Nothing -> Aeson.Null
+                             Just dHash ->
+                               Aeson.String . Crypto.hashToTextAsHex
+                                 $ SafeHash.extractHash dHash
+           ]
+
+deriving instance Show Alonzo.AlonzoGenesis

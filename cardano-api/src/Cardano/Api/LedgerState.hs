@@ -49,6 +49,7 @@ import qualified Data.ByteString.Base16 as Base16
 import           Data.ByteString.Short as BSS
 import           Data.Foldable
 import           Data.IORef
+import           Data.SOP.Strict (NP (..))
 import           Data.Sequence (Seq)
 import qualified Data.Sequence as Seq
 import           Data.Text (Text)
@@ -65,14 +66,18 @@ import           Cardano.Api.IPC (ConsensusModeParams (CardanoModeParams), Epoch
                    LocalNodeClientProtocols (..), LocalNodeClientProtocolsInMode,
                    LocalNodeConnectInfo (..), connectToLocalNode)
 import           Cardano.Api.Modes (CardanoMode)
-import           Cardano.Api.NetworkId (NetworkId)
+import           Cardano.Api.NetworkId (NetworkId (..), NetworkMagic (NetworkMagic))
 import qualified Cardano.Chain.Genesis
 import qualified Cardano.Chain.Update
-import qualified Cardano.Crypto
+import           Cardano.Crypto (ProtocolMagicId (unProtocolMagicId), RequiresNetworkMagic (..))
 import qualified Cardano.Crypto.Hash.Blake2b
 import qualified Cardano.Crypto.Hash.Class
 import qualified Cardano.Crypto.Hashing
 import qualified Cardano.Crypto.ProtocolMagic
+import           Cardano.Ledger.Alonzo.Genesis (AlonzoGenesis (..))
+import qualified Cardano.Ledger.BaseTypes as Shelley.Spec
+import qualified Cardano.Ledger.Credential as Shelley.Spec
+import qualified Cardano.Ledger.Keys as Shelley.Spec
 import           Cardano.Slotting.Slot (WithOrigin (At, Origin))
 import qualified Cardano.Slotting.Slot as Slot
 import           Network.TypedProtocol.Pipelined (Nat (..))
@@ -83,10 +88,12 @@ import qualified Ouroboros.Consensus.Cardano.Block as Consensus
 import qualified Ouroboros.Consensus.Cardano.CanHardFork as Consensus
 import qualified Ouroboros.Consensus.Cardano.Node as Consensus
 import qualified Ouroboros.Consensus.Config as Consensus
+import qualified Ouroboros.Consensus.HardFork.Combinator as Consensus
 import qualified Ouroboros.Consensus.HardFork.Combinator.AcrossEras as HFC
 import qualified Ouroboros.Consensus.HardFork.Combinator.Basics as HFC
 import qualified Ouroboros.Consensus.Ledger.Abstract as Ledger
 import qualified Ouroboros.Consensus.Ledger.Extended as Ledger
+import qualified Ouroboros.Consensus.Mempool.TxLimits as TxLimits
 import qualified Ouroboros.Consensus.Node.ProtocolInfo as Consensus
 import qualified Ouroboros.Consensus.Shelley.Eras as Shelley
 import qualified Ouroboros.Consensus.Shelley.Ledger.Block as Shelley
@@ -98,10 +105,7 @@ import           Ouroboros.Network.Protocol.ChainSync.ClientPipelined
                    ClientPipelinedStIdle (CollectResponse, SendMsgDone, SendMsgRequestNextPipelined),
                    ClientStNext (..))
 import           Ouroboros.Network.Protocol.ChainSync.PipelineDecision
-import qualified Shelley.Spec.Ledger.BaseTypes as Shelley.Spec
-import qualified Shelley.Spec.Ledger.Credential as Shelley.Spec
 import qualified Shelley.Spec.Ledger.Genesis as Shelley.Spec
-import qualified Shelley.Spec.Ledger.Keys as Shelley.Spec
 import qualified Shelley.Spec.Ledger.PParams as Shelley.Spec
 
 data InitialLedgerStateError
@@ -204,8 +208,6 @@ foldBlocks
   -- ^ Path to the cardano-node config file (e.g. <path to cardano-node project>/configuration/cardano/mainnet-config.json)
   -> FilePath
   -- ^ Path to local cardano-node socket. This is the path specified by the @--socket-path@ command line option when running the node.
-  -> NetworkId
-  -- ^ The network ID.
   -> Bool
   -- ^ True to enable validation. Under the hood this will use @applyBlock@
   -- instead of @reapplyBlock@ from the @ApplyBlock@ type class.
@@ -227,7 +229,7 @@ foldBlocks
   -- truncating the last k blocks before the node's tip.
   -> ExceptT FoldBlocksError IO a
   -- ^ The final state
-foldBlocks nodeConfigFilePath socketPath networkId enableValidation state0 accumulate = do
+foldBlocks nodeConfigFilePath socketPath enableValidation state0 accumulate = do
   -- NOTE this was originally implemented with a non-pipelined client then
   -- changed to a pipelined client for a modest speedup:
   --  * Non-pipelined: 1h  0m  19s
@@ -241,7 +243,33 @@ foldBlocks nodeConfigFilePath socketPath networkId enableValidation state0 accum
   errorIORef <- lift $ newIORef Nothing
   stateIORef <- lift $ newIORef state0
 
+  -- Derive the NetworkId as described in network-magic.md from the
+  -- cardano-ledger-specs repo.
+  let byronConfig
+        = (\(Consensus.WrapPartialLedgerConfig (Consensus.ByronPartialLedgerConfig bc _) :* _) -> bc)
+        . HFC.getPerEraLedgerConfig
+        . HFC.hardForkLedgerConfigPerEra
+        $ envLedgerConfig env
+
+      networkMagic
+        = NetworkMagic
+        $ unProtocolMagicId
+        $ Cardano.Chain.Genesis.gdProtocolMagicId
+        $ Cardano.Chain.Genesis.configGenesisData byronConfig
+
+      networkId = case Cardano.Chain.Genesis.configReqNetMagic byronConfig of
+        RequiresNoMagic -> Mainnet
+        RequiresMagic -> Testnet networkMagic
+
   -- Connect to the node.
+  let connectInfo :: LocalNodeConnectInfo CardanoMode
+      connectInfo =
+          LocalNodeConnectInfo {
+            localConsensusModeParams = CardanoModeParams (EpochSlots 21600),
+            localNodeNetworkId       = networkId,
+            localNodeSocketPath      = socketPath
+          }
+
   lift $ connectToLocalNode
     connectInfo
     (protocols stateIORef errorIORef env ledgerState)
@@ -250,13 +278,6 @@ foldBlocks nodeConfigFilePath socketPath networkId enableValidation state0 accum
     Just err -> throwE (FoldBlocksApplyBlockError err)
     Nothing -> lift $ readIORef stateIORef
   where
-    connectInfo :: LocalNodeConnectInfo CardanoMode
-    connectInfo =
-        LocalNodeConnectInfo {
-          localConsensusModeParams = CardanoModeParams (EpochSlots 21600),
-          localNodeNetworkId       = networkId,
-          localNodeSocketPath      = socketPath
-        }
 
     protocols :: IORef a -> IORef (Maybe Text) -> Env -> LedgerState -> LocalNodeClientProtocolsInMode CardanoMode
     protocols stateIORef errorIORef env ledgerState =
@@ -406,7 +427,7 @@ genesisConfigToEnv
   -- enp
   genCfg =
     case genCfg of
-      GenesisCardano _ bCfg sCfg
+      GenesisCardano _ bCfg sCfg _
         | Cardano.Crypto.ProtocolMagic.unProtocolMagicId (Cardano.Chain.Genesis.configProtocolMagicId bCfg) /= Shelley.Spec.sgNetworkMagic (scConfig sCfg) ->
             Left . NECardanoConfig $
               mconcat
@@ -434,6 +455,7 @@ readNetworkConfig (NetworkConfigFile ncf) = do
     return ncfg
       { ncByronGenesisFile = adjustGenesisFilePath (mkAdjustPath ncf) (ncByronGenesisFile ncfg)
       , ncShelleyGenesisFile = adjustGenesisFilePath (mkAdjustPath ncf) (ncShelleyGenesisFile ncfg)
+      , ncAlonzoGenesisFile = adjustGenesisFilePath (mkAdjustPath ncf) (ncAlonzoGenesisFile ncfg)
       }
 
 data NodeConfig = NodeConfig
@@ -442,6 +464,8 @@ data NodeConfig = NodeConfig
   , ncByronGenesisHash :: !GenesisHashByron
   , ncShelleyGenesisFile :: !GenesisFile
   , ncShelleyGenesisHash :: !GenesisHashShelley
+  , ncAlonzoGenesisFile :: !GenesisFile
+  , ncAlonzoGenesisHash :: !GenesisHashAlonzo
   , ncRequiresNetworkMagic :: !Cardano.Crypto.RequiresNetworkMagic
   , ncByronSoftwareVersion :: !Cardano.Chain.Update.SoftwareVersion
   , ncByronProtocolVersion :: !Cardano.Chain.Update.ProtocolVersion
@@ -453,9 +477,7 @@ data NodeConfig = NodeConfig
                               Shelley.StandardAllegra)
   , ncAllegraToMary    :: !(Consensus.ProtocolTransitionParamsShelleyBased
                               Shelley.StandardMary)
---TODO:
---, ncMaryToAlonzo     :: !(Consensus.ProtocolTransitionParamsShelleyBased
---                            Shelley.StandardAlonzo)
+  , ncMaryToAlonzo     :: !Consensus.TriggerHardFork
   }
 
 instance FromJSON NodeConfig where
@@ -470,6 +492,8 @@ instance FromJSON NodeConfig where
           <*> fmap GenesisHashByron (o .: "ByronGenesisHash")
           <*> fmap GenesisFile (o .: "ShelleyGenesisFile")
           <*> fmap GenesisHashShelley (o .: "ShelleyGenesisHash")
+          <*> fmap GenesisFile (o .: "AlonzoGenesisFile")
+          <*> fmap GenesisHashAlonzo (o .: "AlonzoGenesisHash")
           <*> o .: "RequiresNetworkMagic"
           <*> parseByronSoftwareVersion o
           <*> parseByronProtocolVersion o
@@ -479,8 +503,7 @@ instance FromJSON NodeConfig where
                  <$> parseAllegraHardForkEpoch o)
           <*> (Consensus.ProtocolTransitionParamsShelleyBased ()
                  <$> parseMaryHardForkEpoch o)
---        <*> (Consensus.ProtocolTransitionParamsShelleyBased ({-alonzo genesis-})
---               <$> parseAlonzoHardForkEpoch o)
+          <*> parseAlonzoHardForkEpoch o
 
       parseByronProtocolVersion :: Object -> Data.Aeson.Types.Internal.Parser Cardano.Chain.Update.ProtocolVersion
       parseByronProtocolVersion o =
@@ -516,6 +539,13 @@ instance FromJSON NodeConfig where
           , pure $ Consensus.TriggerHardForkAtVersion 4 -- Mainnet default
           ]
 
+      parseAlonzoHardForkEpoch :: Object -> Data.Aeson.Types.Internal.Parser Consensus.TriggerHardFork
+      parseAlonzoHardForkEpoch o =
+        asum
+          [ Consensus.TriggerHardForkAtEpoch <$> o .: "TestAlonzoHardForkAtEpoch"
+          , pure $ Consensus.TriggerHardForkAtVersion 5 -- Mainnet default
+          ]
+
 parseNodeConfig :: ByteString -> Either Text NodeConfig
 parseNodeConfig bs =
   case Yaml.decodeEither' bs of
@@ -549,13 +579,16 @@ newtype LedgerState = LedgerState
 
 -- Usually only one constructor, but may have two when we are preparing for a HFC event.
 data GenesisConfig
-  = GenesisCardano !NodeConfig !Cardano.Chain.Genesis.Config !ShelleyConfig
+  = GenesisCardano
+      !NodeConfig
+      !Cardano.Chain.Genesis.Config
+      !ShelleyConfig
+      !AlonzoGenesis
 
 data ShelleyConfig = ShelleyConfig
   { scConfig :: !(Shelley.Spec.ShelleyGenesis Shelley.StandardShelley)
   , scGenesisHash :: !GenesisHashShelley
   }
-
 
 newtype GenesisFile = GenesisFile
   { unGenesisFile :: FilePath
@@ -567,6 +600,10 @@ newtype GenesisHashByron = GenesisHashByron
 
 newtype GenesisHashShelley = GenesisHashShelley
   { unGenesisHashShelley :: Cardano.Crypto.Hash.Class.Hash Cardano.Crypto.Hash.Blake2b.Blake2b_256 ByteString
+  } deriving newtype (Eq, Show)
+
+newtype GenesisHashAlonzo = GenesisHashAlonzo
+  { unGenesisHashAlonzo :: Cardano.Crypto.Hash.Class.Hash Cardano.Crypto.Hash.Blake2b.Blake2b_256 ByteString
   } deriving newtype (Eq, Show)
 
 newtype LedgerStateDir = LedgerStateDir
@@ -591,7 +628,7 @@ mkProtocolInfoCardano ::
     IO
     (HFC.HardForkBlock
             (Consensus.CardanoEras Consensus.StandardCrypto))
-mkProtocolInfoCardano (GenesisCardano dnc byronGenesis shelleyGenesis)
+mkProtocolInfoCardano (GenesisCardano dnc byronGenesis shelleyGenesis alonzoGenesis)
   = Consensus.protocolInfoCardano
           Consensus.ProtocolParamsByron
             { Consensus.byronGenesis = byronGenesis
@@ -599,6 +636,7 @@ mkProtocolInfoCardano (GenesisCardano dnc byronGenesis shelleyGenesis)
             , Consensus.byronProtocolVersion = ncByronProtocolVersion dnc
             , Consensus.byronSoftwareVersion = ncByronSoftwareVersion dnc
             , Consensus.byronLeaderCredentials = Nothing
+            , Consensus.byronMaxTxCapacityOverrides = TxLimits.mkOverrides TxLimits.noOverridesMeasure
             }
           Consensus.ProtocolParamsShelleyBased
             { Consensus.shelleyBasedGenesis = scConfig shelleyGenesis
@@ -607,20 +645,24 @@ mkProtocolInfoCardano (GenesisCardano dnc byronGenesis shelleyGenesis)
             }
           Consensus.ProtocolParamsShelley
             { Consensus.shelleyProtVer = shelleyProtVer dnc
+            , Consensus.shelleyMaxTxCapacityOverrides = TxLimits.mkOverrides TxLimits.noOverridesMeasure
             }
           Consensus.ProtocolParamsAllegra
             { Consensus.allegraProtVer = shelleyProtVer dnc
+            , Consensus.allegraMaxTxCapacityOverrides = TxLimits.mkOverrides TxLimits.noOverridesMeasure
             }
           Consensus.ProtocolParamsMary
             { Consensus.maryProtVer = shelleyProtVer dnc
+            , Consensus.maryMaxTxCapacityOverrides = TxLimits.mkOverrides TxLimits.noOverridesMeasure
             }
           Consensus.ProtocolParamsAlonzo
-            { Consensus.alonzoProtVer = error "mkProtocolInfoCardano: alonzoProtVer"
+            { Consensus.alonzoProtVer = shelleyProtVer dnc
+            , Consensus.alonzoMaxTxCapacityOverrides  = TxLimits.mkOverrides TxLimits.noOverridesMeasure
             }
           (ncByronToShelley dnc)
           (ncShelleyToAllegra dnc)
           (ncAllegraToMary dnc)
-          (error "mkProtocolInfoCardano: ProtocolTransitionParamsShelleyBased StandardAlonzo")
+          (Consensus.ProtocolTransitionParamsShelleyBased alonzoGenesis (ncMaryToAlonzo dnc))
 
 shelleyPraosNonce :: ShelleyConfig -> Shelley.Spec.Nonce
 shelleyPraosNonce sCfg = Shelley.Spec.Nonce (Cardano.Crypto.Hash.Class.castHash . unGenesisHashShelley $ scGenesisHash sCfg)
@@ -636,12 +678,16 @@ readCardanoGenesisConfig
         :: NodeConfig
         -> ExceptT GenesisConfigError IO GenesisConfig
 readCardanoGenesisConfig enc =
-  GenesisCardano enc <$> readByronGenesisConfig enc <*> readShelleyGenesisConfig enc
+  GenesisCardano enc
+    <$> readByronGenesisConfig enc
+    <*> readShelleyGenesisConfig enc
+    <*> readAlonzoGenesisConfig enc
 
 data GenesisConfigError
   = NEError !Text
   | NEByronConfig !FilePath !Cardano.Chain.Genesis.ConfigurationError
   | NEShelleyConfig !FilePath !Text
+  | NEAlonzoConfig !FilePath !Text
   | NECardanoConfig !Text
 
 renderGenesisConfigError :: GenesisConfigError -> Text
@@ -655,6 +701,10 @@ renderGenesisConfigError ne =
     NEShelleyConfig fp txt ->
       mconcat
         [ "Failed reading Shelley genesis file ", textShow fp, ": ", txt
+        ]
+    NEAlonzoConfig fp txt ->
+      mconcat
+        [ "Failed reading Alonzo genesis file ", textShow fp, ": ", txt
         ]
     NECardanoConfig err ->
       mconcat
@@ -691,19 +741,27 @@ readShelleyGenesisConfig
 readShelleyGenesisConfig enc = do
   let file = unGenesisFile $ ncShelleyGenesisFile enc
   firstExceptT (NEShelleyConfig file . renderShelleyGenesisError)
-    $ readGenesis (GenesisFile file) (ncShelleyGenesisHash enc)
+    $ readShelleyGenesis (GenesisFile file) (ncShelleyGenesisHash enc)
+
+readAlonzoGenesisConfig
+    :: NodeConfig
+    -> ExceptT GenesisConfigError IO AlonzoGenesis
+readAlonzoGenesisConfig enc = do
+  let file = unGenesisFile $ ncAlonzoGenesisFile enc
+  firstExceptT (NEAlonzoConfig file . renderAlonzoGenesisError)
+    $ readAlonzoGenesis (GenesisFile file) (ncAlonzoGenesisHash enc)
 
 textShow :: Show a => a -> Text
 textShow = Text.pack . show
 
-readGenesis
+readShelleyGenesis
     :: GenesisFile -> GenesisHashShelley
     -> ExceptT ShelleyGenesisError IO ShelleyConfig
-readGenesis (GenesisFile file) expectedGenesisHash = do
-    content <- handleIOExceptT (GenesisReadError file . textShow) $ BS.readFile file
+readShelleyGenesis (GenesisFile file) expectedGenesisHash = do
+    content <- handleIOExceptT (ShelleyGenesisReadError file . textShow) $ BS.readFile file
     let genesisHash = GenesisHashShelley (Cardano.Crypto.Hash.Class.hashWith id content)
     checkExpectedGenesisHash genesisHash
-    genesis <- firstExceptT (GenesisDecodeError file . Text.pack)
+    genesis <- firstExceptT (ShelleyGenesisDecodeError file . Text.pack)
                   . hoistEither
                   $ Aeson.eitherDecodeStrict' content
     pure $ ShelleyConfig genesis genesisHash
@@ -711,39 +769,84 @@ readGenesis (GenesisFile file) expectedGenesisHash = do
     checkExpectedGenesisHash :: GenesisHashShelley -> ExceptT ShelleyGenesisError IO ()
     checkExpectedGenesisHash actual =
       if actual /= expectedGenesisHash
-        then left (GenesisHashMismatch actual expectedGenesisHash)
+        then left (ShelleyGenesisHashMismatch actual expectedGenesisHash)
         else pure ()
 
 data ShelleyGenesisError
-     = GenesisReadError !FilePath !Text
-     | GenesisHashMismatch !GenesisHashShelley !GenesisHashShelley -- actual, expected
-     | GenesisDecodeError !FilePath !Text
+     = ShelleyGenesisReadError !FilePath !Text
+     | ShelleyGenesisHashMismatch !GenesisHashShelley !GenesisHashShelley -- actual, expected
+     | ShelleyGenesisDecodeError !FilePath !Text
      deriving Show
 
 renderShelleyGenesisError :: ShelleyGenesisError -> Text
 renderShelleyGenesisError sge =
     case sge of
-      GenesisReadError fp err ->
+      ShelleyGenesisReadError fp err ->
         mconcat
           [ "There was an error reading the genesis file: ", Text.pack fp
           , " Error: ", err
           ]
 
-      GenesisHashMismatch actual expected ->
+      ShelleyGenesisHashMismatch actual expected ->
         mconcat
-          [ "Wrong Shelley genesis file: the actual hash is ", renderHash actual
+          [ "Wrong Shelley genesis file: the actual hash is ", renderHash (unGenesisHashShelley actual)
           , ", but the expected Shelley genesis hash given in the node "
-          , "configuration file is ", renderHash expected, "."
+          , "configuration file is ", renderHash (unGenesisHashShelley expected), "."
           ]
 
-      GenesisDecodeError fp err ->
+      ShelleyGenesisDecodeError fp err ->
         mconcat
           [ "There was an error parsing the genesis file: ", Text.pack fp
           , " Error: ", err
           ]
+
+readAlonzoGenesis
+    :: GenesisFile -> GenesisHashAlonzo
+    -> ExceptT AlonzoGenesisError IO AlonzoGenesis
+readAlonzoGenesis (GenesisFile file) expectedGenesisHash = do
+    content <- handleIOExceptT (AlonzoGenesisReadError file . textShow) $ BS.readFile file
+    let genesisHash = GenesisHashAlonzo (Cardano.Crypto.Hash.Class.hashWith id content)
+    checkExpectedGenesisHash genesisHash
+    firstExceptT (AlonzoGenesisDecodeError file . Text.pack)
+                  . hoistEither
+                  $ Aeson.eitherDecodeStrict' content
   where
-    renderHash :: GenesisHashShelley -> Text
-    renderHash (GenesisHashShelley h) = Text.decodeUtf8 $ Base16.encode (Cardano.Crypto.Hash.Class.hashToBytes h)
+    checkExpectedGenesisHash :: GenesisHashAlonzo -> ExceptT AlonzoGenesisError IO ()
+    checkExpectedGenesisHash actual =
+      if actual /= expectedGenesisHash
+        then left (AlonzoGenesisHashMismatch actual expectedGenesisHash)
+        else pure ()
+
+data AlonzoGenesisError
+     = AlonzoGenesisReadError !FilePath !Text
+     | AlonzoGenesisHashMismatch !GenesisHashAlonzo !GenesisHashAlonzo -- actual, expected
+     | AlonzoGenesisDecodeError !FilePath !Text
+     deriving Show
+
+renderAlonzoGenesisError :: AlonzoGenesisError -> Text
+renderAlonzoGenesisError sge =
+    case sge of
+      AlonzoGenesisReadError fp err ->
+        mconcat
+          [ "There was an error reading the genesis file: ", Text.pack fp
+          , " Error: ", err
+          ]
+
+      AlonzoGenesisHashMismatch actual expected ->
+        mconcat
+          [ "Wrong Alonzo genesis file: the actual hash is ", renderHash (unGenesisHashAlonzo actual)
+          , ", but the expected Alonzo genesis hash given in the node "
+          , "configuration file is ", renderHash (unGenesisHashAlonzo expected), "."
+          ]
+
+      AlonzoGenesisDecodeError fp err ->
+        mconcat
+          [ "There was an error parsing the genesis file: ", Text.pack fp
+          , " Error: ", err
+          ]
+
+renderHash :: Cardano.Crypto.Hash.Class.Hash Cardano.Crypto.Hash.Blake2b.Blake2b_256 ByteString -> Text
+renderHash h = Text.decodeUtf8 $ Base16.encode (Cardano.Crypto.Hash.Class.hashToBytes h)
 
 newtype StakeCred
   = StakeCred { _unStakeCred :: Shelley.Spec.Credential 'Shelley.Spec.Staking Consensus.StandardCrypto }

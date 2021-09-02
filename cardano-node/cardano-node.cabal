@@ -1,7 +1,7 @@
-cabal-version: 2.4
+cabal-version: 3.0
 
 name:                   cardano-node
-version:                1.27.0
+version:                1.28.0
 description:            The cardano full node
 author:                 IOHK
 maintainer:             operations@iohk.io
@@ -120,7 +120,7 @@ library
                       , generic-data
                       , hostname
                       , iproute
-                      , io-sim-classes
+                      , io-classes
                       , iohk-monitoring
                       , lobemo-backend-aggregation
                       , lobemo-backend-ekg

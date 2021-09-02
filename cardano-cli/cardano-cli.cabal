@@ -1,7 +1,7 @@
-cabal-version: 2.4
+cabal-version: 3.0
 
 name:                   cardano-cli
-version:                1.27.0
+version:                1.28.0
 description:            The Cardano command-line interface.
 author:                 IOHK
 maintainer:             operations@iohk.io
@@ -52,6 +52,7 @@ library
 
   exposed-modules:      Cardano.CLI.Helpers
                         Cardano.CLI.Parsers
+                        Cardano.CLI.Render
                         Cardano.CLI.Run
                         Cardano.CLI.Run.Friendly
                         Cardano.CLI.Types
@@ -73,6 +74,7 @@ library
                         Cardano.CLI.Shelley.Commands
                         Cardano.CLI.Shelley.Key
                         Cardano.CLI.Shelley.Orphans
+                        Cardano.CLI.Shelley.Output
                         Cardano.CLI.Shelley.Parsers
                         Cardano.CLI.Shelley.Run
                         Cardano.CLI.Shelley.Run.Address
@@ -88,8 +90,6 @@ library
                         Cardano.CLI.Shelley.Run.Transaction
                         Cardano.CLI.Shelley.Script
 
-                        Cardano.CLI.Mary.RenderValue
-                        Cardano.CLI.Mary.TxOutParser
                         Cardano.CLI.Mary.ValueParser
 
                         Cardano.CLI.TopHandler
@@ -115,6 +115,7 @@ library
                       , cardano-ledger-core
                       , cardano-ledger-shelley-ma
                       , cardano-prelude
+                      , cardano-slotting
                       , contra-tracer
                       , cborg >= 0.2.4 && < 0.3
                       , containers
@@ -131,14 +132,16 @@ library
                       , ouroboros-consensus-shelley
                       , ouroboros-network
                       , parsec
-                      , plutus-core
                       , plutus-ledger-api
+                      , prettyprinter
                       , shelley-spec-ledger
                       , small-steps
                       , split
+                      , stm
                       , strict-containers
                       , text
                       , time
+                      , transformers
                       , transformers-except
                       , utf8-string
                       , unordered-containers
@@ -169,10 +172,11 @@ test-suite cardano-cli-test
                       , bytestring
                       , base16-bytestring
                       , cardano-api
-                      , cardano-api-test
+                      , cardano-api:gen
                       , cardano-cli
                       , cardano-node
                       , cardano-prelude
+                      , cardano-slotting
                       , exceptions
                       , hedgehog
                       , hedgehog-extras
@@ -188,6 +192,7 @@ test-suite cardano-cli-test
                         Test.Cli.Pioneers.Exercise4
                         Test.Cli.Pioneers.Exercise5
                         Test.Cli.Pioneers.Exercise6
+                        Test.Cli.Shelley.Run.Query
                         Test.OptParse
 
   ghc-options:          -threaded -rtsopts -with-rtsopts=-N -with-rtsopts=-T
@@ -211,6 +216,7 @@ test-suite cardano-cli-golden
                       , Diff
                       , directory
                       , exceptions
+                      , filepath
                       , hedgehog
                       , hedgehog-extras
                       , text

@@ -19,9 +19,11 @@ cabal.project                                                 @LaurenceIO
 doc                                                           @docs-access
 README.*                                                      @docs-access
 
-
+bench/tx-generator                                            @deepfire @MarcFontaine
+bench                                                         @deepfire @denisshevchenko @jutaro @MarcFontaine
 nix/workbench                                                 @deepfire @denisshevchenko @jutaro @MarcFontaine
 nix/supervisord-cluster                                       @deepfire @denisshevchenko @jutaro @MarcFontaine
+trace-forward                                                 @deepfire @denisshevchenko @jutaro
 Makefile                                                      @deepfire
 
 .buildkite                                                    @devops
@@ -32,7 +34,7 @@ nix                                                           @devops
 *.nix                                                         @devops
 flake.lock                                                    @devops
 bors.toml                                                     @devops
-cardano-node/src/Cardano/Tracing/OrphanInstances/Network.hs   @devops
+cardano-node/src/Cardano/Tracing/OrphanInstances/Network.hs   @devops @coot @karknu
 cardano-node/src/Cardano/Node/Configuration/Logging.hs        @devops
 cardano-node/src/Cardano/Node/Configuration/Socket.hs         @devops
 cardano-node/src/Cardano/Node/Run.hs                          @devops

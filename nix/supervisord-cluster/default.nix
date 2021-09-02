@@ -1,8 +1,8 @@
 let
   basePortDefault    = 30000;
   cacheDirDefault    = "${__getEnv "HOME"}/.cache/cardano-workbench";
-  stateDirDefault    = "state-cluster";
-  profileNameDefault = "default-mary";
+  stateDirDefault    = "run/current";
+  profileNameDefault = "default-alzo";
 in
 { pkgs
 , workbench
@@ -33,6 +33,10 @@ let
            then "topology for-local-node     ${toString i}   ${profile.topology.files} ${toString basePort}"
            else "topology for-local-observer ${profile.name} ${profile.topology.files} ${toString basePort}");
 
+      nodePublicIP =
+        { i, name, ... }@nodeSpec:
+        "127.0.0.1";
+
       finaliseNodeService =
         { name, i, isProducer, ... }: svc: recursiveUpdate svc
           ({
@@ -52,7 +56,8 @@ let
       finaliseNodeConfig =
         { port, ... }: cfg: recursiveUpdate cfg
           ({
-            ShelleyGenesisFile   = "../genesis/genesis.json";
+            AlonzoGenesisFile    = "../genesis/alonzo-genesis.json";
+            ShelleyGenesisFile   = "../genesis.json";
             ByronGenesisFile     = "../genesis/byron/genesis.json";
           } // optionalAttrs enableEKG {
             hasEKG               = port + supervisord.portShiftEkg;
@@ -60,6 +65,24 @@ let
             setupBackends = [
               "EKGViewBK"
             ];
+          });
+
+      finaliseGeneratorService =
+        svc: recursiveUpdate svc
+          ({
+            sigKey         = "../genesis/utxo-keys/utxo1.skey";
+            nodeConfigFile = "config.json";
+            runScriptFile  = "run-script.json";
+          } // optionalAttrs useCabalRun {
+            executable     = "cabal run exe:tx-generator --";
+          });
+
+      finaliseGeneratorConfig =
+        cfg: recursiveUpdate cfg
+          ({
+            AlonzoGenesisFile    = "../genesis/alonzo-genesis.json";
+            ShelleyGenesisFile   = "../genesis.json";
+            ByronGenesisFile     = "../genesis/byron/genesis.json";
           });
 
       ## Backend-specific Nix bits:
@@ -74,7 +97,7 @@ let
           mkSupervisorConf =
             profile:
             pkgs.callPackage ./supervisor-conf.nix
-            { inherit (profile) node-services;
+            { inherit (profile) node-services generator-service;
               inherit
                 pkgs lib stateDir
                 basePort
@@ -111,71 +134,102 @@ let
     ++ optionals (!workbenchDevMode)
     [ workbench.workbench ];
 
+  startClusterUsage = ''
+Usage:
+   start-cluster [FLAGS..]
+
+   Flags:
+
+      --batch-name NAME               Override the batch name (default: ${batchName})
+      --no-generator | --no-gen       Don't auto-start the tx-generator
+
+      --trace | --debug               Trace the start-cluster script
+      --trace-wb | --trace-workbench  Trace the workbench script
+      --help                          This help message
+'';
+
   start = pkgs.writeScriptBin "start-cluster" ''
     set -euo pipefail
 
-    workbench-prebuild-executables
-
     batch_name=${batchName}
+    run_start_flags=()
 
     while test $# -gt 0
     do case "$1" in
-        --batch-name ) batch_name=$2; shift;;
-        --trace | --debug ) set -x;;
+        --batch-name )                   batch_name=$2; shift;;
+        --no-generator | --no-gen )      run_start_flags+=($1);;
+
+        --trace | --debug )              set -x;;
         --trace-wb | --trace-workbench ) export WORKBENCH_EXTRA_FLAGS=--trace;;
+        --help )                         cat <<EOF
+${startClusterUsage}
+EOF
+                                         exit 1;;
         * ) break;; esac; shift; done
+
+    workbench-prebuild-executables
 
     export PATH=$PATH:${path}
 
     wb backend assert-is supervisor
-    wb backend pre-run-hook    "${stateDir}"
+    wb backend assert-stopped
 
     wb_run_allocate_args=(
         --cache-dir            "${cacheDir}"
         --base-port             ${toString basePort}
         --stagger-ports
+        --
         --port-shift-ekg        100
         --port-shift-prometheus 200
+        --supervisor-conf      "${backend.supervisord.mkSupervisorConf profile}"
       )
     wb run allocate $batch_name ${profile.name} "''${wb_run_allocate_args[@]}"
-    rm -f                      "${stateDir}"
-    ln -sf         run/current "${stateDir}"
 
     current_run_path=$(wb run current-path)
     ${workbench.initialiseProfileRunDirShellScript profile "$current_run_path"}
 
-    wb_run_start_args=(
-        --supervisor-conf      "${backend.supervisord.mkSupervisorConf profile}"
-      )
-    wb run start $(wb run current-name) "''${wb_run_start_args[@]}"
+    wb run start "''${run_start_flags[@]}" $(wb run current-tag)
 
     echo 'workbench:  cluster started. Run `stop-cluster` to stop'
   '';
+
   stop = pkgs.writeScriptBin "stop-cluster" ''
     set -euo pipefail
 
     while test $# -gt 0
     do case "$1" in
-        --trace | --debug ) set -x;;
+        --trace | --debug )              set -x;;
+        --trace-wb | --trace-workbench ) export WORKBENCH_EXTRA_FLAGS=--trace;;
         * ) break;; esac; shift; done
 
-    ${pkgs.python3Packages.supervisor}/bin/supervisorctl stop all
-    if wb backend is-running
-    then
-      if test -f "${stateDir}/supervisor/cardano-node.pids"
-      then kill $(<${stateDir}/supervisor/supervisord.pid) $(<${stateDir}/supervisor/cardano-node.pids)
-      else pkill supervisord
-      fi
-      echo "workbench:  cluster terminated"
-      rm -f ${stateDir}/supervisor/supervisord.pid ${stateDir}/supervisor/cardano-node.pids
-    else
-      echo "workbench:  cluster is not running"
-    fi
+    wb run stop $(wb run current-tag)
+  '';
+
+  restart = pkgs.writeScriptBin "restart-cluster" ''
+    set -euo pipefail
+
+    wb_flags=()
+    wb_run_restart_flags=()
+
+    while test $# -gt 0
+    do case "$1" in
+        --no-generator | --no-gen )      wb_run_restart_flags+=($1);;
+        --trace | --debug | --trace-wb | --trace-workbench )
+                                         wb_flags+=(--trace);;
+        --help )                         cat <<EOF
+${startClusterUsage}
+EOF
+                                         exit 1;;
+        * ) break;; esac; shift; done
+
+    wb "''${wb_flags[@]}" run restart "''${wb_run_restart_flags[@]}"
+
+    echo "workbench:  alternate command for this action:  wb run restart"
   '';
 
 in
 {
   inherit workbench;
   inherit (workbenchProfiles) profilesJSON;
-  inherit profile stateDir start stop;
+  inherit profile stateDir start stop restart;
 }
